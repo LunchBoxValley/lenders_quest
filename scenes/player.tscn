@@ -1,0 +1,14 @@
+[gd_scene format=3 uid="uid://hpg5n2ldv2tm"]
+
+[ext_resource type="Texture2D" uid="uid://cmke1g7bfgxm6" path="res://assets/tilesets/tileset.png" id="1_3vyb7"]
+[ext_resource type="Script" uid="uid://bcyc6u22cdjqr" path="res://scenes/player.gd" id="1_g2els"]
+
+[node name="Player" type="Node2D" unique_id=318157462]
+z_index = 10
+script = ExtResource("1_g2els")
+metadata/_edit_group_ = true
+
+[node name="Sprite2D" type="Sprite2D" parent="." unique_id=88953638]
+texture = ExtResource("1_3vyb7")
+region_enabled = true
+region_rect = Rect2(64, 0, 16, 16)

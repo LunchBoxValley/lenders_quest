@@ -1,0 +1,13 @@
+[gd_scene format=3 uid="uid://cbo7omnec2pp7"]
+
+[ext_resource type="Texture2D" uid="uid://cmke1g7bfgxm6" path="res://assets/tilesets/tileset.png" id="1_7p1mj"]
+[ext_resource type="Script" uid="uid://c0vbsjy41itp" path="res://scenes/enemy.gd" id="1_md0e3"]
+
+[node name="Enemy" type="Node2D" unique_id=1517353840]
+z_index = 10
+script = ExtResource("1_md0e3")
+
+[node name="Sprite2D" type="Sprite2D" parent="." unique_id=92464077]
+texture = ExtResource("1_7p1mj")
+region_enabled = true
+region_rect = Rect2(80, 0, 16, 16)

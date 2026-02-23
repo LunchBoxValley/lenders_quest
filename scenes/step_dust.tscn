@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://7n84pvrirrmd"]
+
+[ext_resource type="Script" uid="uid://cunxdfg7qyrkc" path="res://scenes/step_dust.gd" id="1_8ag67"]
+
+[node name="StepDust" type="Node2D" unique_id=429422339]
+script = ExtResource("1_8ag67")
