@@ -40,6 +40,11 @@ signal turn_taken(player_grid_pos: Vector2i)
 @export var room_width_px: int = 320
 @export var room_height_px: int = 192
 
+# NEW: prototype switch
+# If false: empty tile cells (no TileData) are walkable (lets you scroll into unpainted rooms).
+# If true: empty cells are blocked (safer for finished levels).
+@export var empty_cells_are_blocked: bool = false
+
 var map: TileMapLayer
 var enemy: Node
 var cam: Node
@@ -112,7 +117,7 @@ func try_move_or_attack(dir: Vector2i) -> void:
 			turn_taken.emit(grid_pos)
 			return
 
-	# --- Zelda-style door check ---
+	# --- Door requirement only when crossing to a new room ---
 	if edge_transition_requires_door and _crosses_room_boundary(grid_pos, next):
 		var ok: bool = _is_door(grid_pos) or _is_door(next)
 		if not ok:
@@ -137,9 +142,6 @@ func try_move_or_attack(dir: Vector2i) -> void:
 	turn_taken.emit(grid_pos)
 
 
-# ------------------------------------------------
-# Room boundary detection (warning-free)
-# ------------------------------------------------
 func _crosses_room_boundary(from_tile: Vector2i, to_tile: Vector2i) -> bool:
 	var room_w_tiles: int = maxi(1, int(floor(float(room_width_px) / float(tile_size))))
 	var room_h_tiles: int = maxi(1, int(floor(float(room_height_px) / float(tile_size))))
@@ -160,7 +162,7 @@ func _crosses_room_boundary(from_tile: Vector2i, to_tile: Vector2i) -> bool:
 func _is_blocked(tile: Vector2i) -> bool:
 	var td: TileData = map.get_cell_tile_data(tile)
 	if td == null:
-		return true
+		return empty_cells_are_blocked
 	return bool(td.get_custom_data("blocked"))
 
 
