@@ -40,10 +40,16 @@ signal turn_taken(player_grid_pos: Vector2i)
 @export var room_width_px: int = 320
 @export var room_height_px: int = 192
 
-# NEW: prototype switch
-# If false: empty tile cells (no TileData) are walkable (lets you scroll into unpainted rooms).
-# If true: empty cells are blocked (safer for finished levels).
 @export var empty_cells_are_blocked: bool = false
+
+# ------------------------------------------------
+# NEW: Hazard tiles (spikes, lava, etc.)
+# ------------------------------------------------
+@export var hazard_custom_key: StringName = &"hazard"
+@export var hazard_damage_key: StringName = &"hazard_damage"
+@export var hazard_default_damage: int = 1
+@export var hazard_hitstop_frames: int = 1
+@export var hazard_shake_strength: float = 1.5
 
 var map: TileMapLayer
 var enemy: Node
@@ -129,6 +135,7 @@ func try_move_or_attack(dir: Vector2i) -> void:
 		_busy = false
 		return
 
+	# --- Move ---
 	grid_pos = next
 	var target_global: Vector2 = map.to_global(map.map_to_local(grid_pos))
 
@@ -138,8 +145,35 @@ func try_move_or_attack(dir: Vector2i) -> void:
 
 	_spawn_step_dust(dir)
 
+	# --- NEW: Hazard check on landing ---
+	await _apply_hazard_if_needed(grid_pos)
+
 	_busy = false
 	turn_taken.emit(grid_pos)
+
+
+func _apply_hazard_if_needed(tile: Vector2i) -> void:
+	var td: TileData = map.get_cell_tile_data(tile)
+	if td == null:
+		return
+
+	var is_hazard: bool = bool(td.get_custom_data(hazard_custom_key))
+	if not is_hazard:
+		return
+
+	var dmg: int = hazard_default_damage
+	var raw = td.get_custom_data(hazard_damage_key)
+	if typeof(raw) == TYPE_INT:
+		dmg = int(raw)
+
+	# Apply damage + small feedback
+	take_damage(dmg)
+
+	# Optional extra juice for hazards (small)
+	_do_shake(hazard_shake_strength)
+	var frames: int = maxi(1, hazard_hitstop_frames)
+	for _i in range(frames):
+		await get_tree().process_frame
 
 
 func _crosses_room_boundary(from_tile: Vector2i, to_tile: Vector2i) -> bool:
