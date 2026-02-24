@@ -28,14 +28,9 @@ extends Node2D
 @export var hp_seg_h: int = 2
 @export var hp_seg_gap: int = 1
 
-# Hit flash
-@export var hit_flash_blinks: int = 2
-@export var hit_flash_time: float = 0.05
-
-# Hitstop + shake
+# Hitstop + shake (optional; only used if your camera has shake())
 @export var hitstop_frames: int = 1
 @export var shake_on_hit_strength: float = 2.0
-@export var shake_on_hurt_strength: float = 1.5
 @export var shake_frames: int = 2
 
 var map: TileMapLayer
@@ -44,12 +39,12 @@ var cam: Node
 
 var grid_pos: Vector2i
 var hp: int
-var _hit_flash_playing: bool = false
 
 var _telegraphing: bool = false
 var _telegraph_dir: Vector2i = Vector2i.ZERO
 
 @onready var body: Sprite2D = $Sprite2D
+
 
 func _ready() -> void:
 	map = get_node(map_path) as TileMapLayer
@@ -58,38 +53,47 @@ func _ready() -> void:
 
 	hp = max_hp
 
-	grid_pos = Vector2i(
-		round(position.x / tile_size),
-		round(position.y / tile_size)
-	)
-	position = Vector2(grid_pos.x * tile_size, grid_pos.y * tile_size)
+	# Snap to the tile you are actually standing on, using the TileMap's transforms.
+	var local_pos := map.to_local(global_position)
+	grid_pos = map.local_to_map(local_pos + Vector2(tile_size * 0.5, tile_size * 0.5))
+	global_position = map.to_global(map.map_to_local(grid_pos))
+
+	# AUTO-CONNECT to player turn signal so enemy definitely gets turns.
+	if player != null and player.has_signal("turn_taken"):
+		if not player.is_connected("turn_taken", Callable(self, "_on_player_turn_taken")):
+			player.connect("turn_taken", Callable(self, "_on_player_turn_taken"))
 
 	randomize()
 	queue_redraw()
 
-func take_turn(player_grid_pos: Vector2i) -> void:
-	if player == null:
-		return
 
+func _on_player_turn_taken(player_grid_pos: Vector2i) -> void:
+	await take_turn(player_grid_pos)
+
+
+func take_turn(player_grid_pos: Vector2i) -> void:
+	# If we were telegraphing, attack if still adjacent; otherwise cancel.
 	if _telegraphing:
 		if _manhattan(grid_pos, player_grid_pos) == 1:
-			var dmg := randi_range(damage_min, damage_max) + telegraph_damage_bonus
-			player.take_damage(dmg)
-			_do_shake(shake_on_hit_strength)
-			await _do_hitstop()
-			_end_telegraph()
-			return
-		else:
-			_end_telegraph()
+			if player != null and player.has_method("take_damage"):
+				var dmg := randi_range(damage_min, damage_max) + telegraph_damage_bonus
+				player.take_damage(dmg)
+				_do_shake(shake_on_hit_strength)
+				await _do_hitstop()
+		_end_telegraph()
+		return
 
+	# If adjacent, begin telegraph instead of instant hit.
 	if _manhattan(grid_pos, player_grid_pos) == 1:
 		_begin_telegraph(player_grid_pos)
 		return
 
+	# Otherwise, chase.
 	var step := _choose_step_toward(player_grid_pos)
 	if step == Vector2i.ZERO:
 		return
 
+	# Face direction
 	if step.x < 0:
 		body.flip_h = true
 	elif step.x > 0:
@@ -97,35 +101,51 @@ func take_turn(player_grid_pos: Vector2i) -> void:
 
 	var next := grid_pos + step
 	if _is_blocked(next):
-		return
+		# If the "best" step is blocked, try the other axis as a fallback.
+		var alt := _choose_step_toward(player_grid_pos, true)
+		if alt != Vector2i.ZERO and not _is_blocked(grid_pos + alt):
+			step = alt
+			next = grid_pos + step
+		else:
+			return
 
 	grid_pos = next
-	var target_pos := Vector2(grid_pos.x * tile_size, grid_pos.y * tile_size)
+	var target_global := map.to_global(map.map_to_local(grid_pos))
 
 	var tw := create_tween()
-	tw.tween_property(self, "position", target_pos, move_time).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(self, "global_position", target_global, move_time).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	await tw.finished
 
 	_spawn_step_dust(step)
 
-func _spawn_step_dust(move_dir: Vector2i) -> void:
-	if step_dust_scene == null:
-		return
 
-	var d := step_dust_scene.instantiate() as Node2D
-	get_parent().add_child(d)
+func _choose_step_toward(target: Vector2i, force_other_axis: bool = false) -> Vector2i:
+	var dx := target.x - grid_pos.x
+	var dy := target.y - grid_pos.y
 
-	var behind := Vector2(-move_dir.x, -move_dir.y) * step_dust_trail_px
-	var feet := Vector2(0.0, step_dust_offset_y)
-	var spawn_pos := global_position + feet + behind
-
-	if d.has_method("setup"):
-		d.setup(spawn_pos)
+	# Primary axis is the larger distance, unless we force the other axis.
+	if not force_other_axis:
+		if abs(dx) > abs(dy):
+			return Vector2i(sign(dx), 0)
+		elif abs(dy) > abs(dx):
+			return Vector2i(0, sign(dy))
+		else:
+			# Tie: randomize so we don't "bias" and get stuck.
+			if randi() % 2 == 0:
+				return Vector2i(sign(dx), 0)
+			else:
+				return Vector2i(0, sign(dy))
 	else:
-		d.global_position = spawn_pos
+		# Forced alternate axis
+		if abs(dx) >= abs(dy):
+			return Vector2i(0, sign(dy))
+		else:
+			return Vector2i(sign(dx), 0)
+
 
 func _begin_telegraph(player_grid_pos: Vector2i) -> void:
 	_telegraphing = true
+
 	var dx := player_grid_pos.x - grid_pos.x
 	var dy := player_grid_pos.y - grid_pos.y
 
@@ -143,80 +163,62 @@ func _begin_telegraph(player_grid_pos: Vector2i) -> void:
 	var tw := create_tween()
 	tw.tween_property(body, "position", target, telegraph_lean_time).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 
+
 func _end_telegraph() -> void:
 	_telegraphing = false
 	var tw := create_tween()
 	tw.tween_property(body, "position", Vector2.ZERO, 0.06).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 
+
+func _is_blocked(tile: Vector2i) -> bool:
+	var td: TileData = map.get_cell_tile_data(tile)
+	if td == null:
+		return true
+	return bool(td.get_custom_data("blocked"))
+
+
 func _manhattan(a: Vector2i, b: Vector2i) -> int:
 	return abs(a.x - b.x) + abs(a.y - b.y)
 
-func _choose_step_toward(target: Vector2i) -> Vector2i:
-	var dx := target.x - grid_pos.x
-	var dy := target.y - grid_pos.y
 
-	if abs(dx) > abs(dy):
-		return Vector2i(sign(dx), 0)
-	elif abs(dy) > abs(dx):
-		return Vector2i(0, sign(dy))
+func _spawn_step_dust(move_dir: Vector2i) -> void:
+	if step_dust_scene == null:
+		return
+
+	var d := step_dust_scene.instantiate() as Node2D
+	get_parent().add_child(d)
+
+	var behind := Vector2(-move_dir.x, -move_dir.y) * step_dust_trail_px
+	var feet := Vector2(0.0, step_dust_offset_y)
+	var spawn_pos := global_position + feet + behind
+
+	if d.has_method("setup"):
+		d.setup(spawn_pos)
 	else:
-		if randi() % 2 == 0:
-			return Vector2i(sign(dx), 0)
-		else:
-			return Vector2i(0, sign(dy))
+		d.global_position = spawn_pos
 
-func _is_blocked(tile: Vector2i) -> bool:
-	var world_pos := Vector2(tile.x * tile_size, tile.y * tile_size)
-	var cell := map.local_to_map(world_pos)
-	var td: TileData = map.get_cell_tile_data(cell)
-
-	if td == null:
-		return true
-
-	var blocked_val = td.get_custom_data("blocked")
-	if blocked_val == null:
-		return false
-
-	return bool(blocked_val)
-
-func take_damage(amount: int) -> void:
-	hp -= amount
-	hp = max(hp, 0)
-
-	queue_redraw()
-	_play_hit_flash()
-
-	_do_shake(shake_on_hurt_strength)
-	await _do_hitstop()
-
-	if hp <= 0:
-		queue_free()
 
 func _do_shake(strength: float) -> void:
 	if cam != null and cam.has_method("shake"):
 		cam.shake(strength, shake_frames)
 
+
 func _do_hitstop() -> void:
 	for _i in range(maxi(1, hitstop_frames)):
 		await get_tree().process_frame
 
-func _play_hit_flash() -> void:
-	if body == null or _hit_flash_playing:
-		return
 
-	_hit_flash_playing = true
-	for _i in range(hit_flash_blinks):
-		body.visible = false
-		await get_tree().create_timer(hit_flash_time).timeout
-		body.visible = true
-		await get_tree().create_timer(hit_flash_time).timeout
-	_hit_flash_playing = false
+func take_damage(amount: int) -> void:
+	hp -= amount
+	hp = max(hp, 0)
+	queue_redraw()
+	if hp <= 0:
+		queue_free()
+
 
 func get_grid_pos() -> Vector2i:
 	return grid_pos
 
-func _on_player_turn_taken(player_grid_pos: Vector2i) -> void:
-	await take_turn(player_grid_pos)
 
 func _draw() -> void:
 	var total_segments: int = int(ceil(float(max_hp) / float(hp_per_segment)))
@@ -231,5 +233,9 @@ func _draw() -> void:
 
 	for i in range(total_segments):
 		var x: float = start_x + float(i * (hp_seg_w + hp_seg_gap))
-		var col := Color(1,1,1,1) if i < filled_segments else Color(0.35,0.35,0.35,1)
-		draw_rect(Rect2(Vector2(x, bar_y), Vector2(hp_seg_w, hp_seg_h)), col, true)
+
+		var col: Color = Color(0.35, 0.35, 0.35, 1)
+		if i < filled_segments:
+			col = Color(1, 1, 1, 1)
+
+		draw_rect(Rect2(Vector2(x, bar_y), Vector2(float(hp_seg_w), float(hp_seg_h))), col, true)
