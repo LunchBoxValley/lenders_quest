@@ -1,0 +1,69 @@
+[gd_scene format=3 uid="uid://cbjsobhk7y54s"]
+
+[ext_resource type="Script" uid="uid://bgp2fxfgkkwfv" path="res://scenes/title.gd" id="1_ypm2n"]
+[ext_resource type="PackedScene" uid="uid://cnov2a6ggkd7i" path="res://scenes/main.tscn" id="2_grrl1"]
+[ext_resource type="Script" uid="uid://5615wb1tsgqv" path="res://scenes/CRTController_Title.gd" id="3_81vop"]
+[ext_resource type="Shader" uid="uid://dffsrlv0h7r5j" path="res://scenes/title.gdshader" id="4_34sri"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_4rr2b"]
+shader = ExtResource("4_34sri")
+shader_parameter/scanline_strength = 0.55
+shader_parameter/scanline_density = 450.0
+shader_parameter/scanline_thickness = 0.85
+shader_parameter/scanline_offset = 0.2
+shader_parameter/scanline_drift_speed = 0.015
+shader_parameter/scanline_drift_amount = 0.03
+shader_parameter/grille_strength = 0.1
+shader_parameter/grille_density = 900.0
+shader_parameter/phosphor_strength = 0.09
+shader_parameter/phosphor_offset_px = 1.95
+shader_parameter/phosphor_soften = 0.55
+shader_parameter/phosphor_dir = Vector2(-1, 0.8)
+shader_parameter/edge_soften_strength = 0.18
+shader_parameter/edge_soften_radius_px = 1.0
+shader_parameter/edge_soften_start = 0.25
+shader_parameter/edge_soften_end = 1.1
+shader_parameter/flicker_strength = 0.015
+shader_parameter/flicker_speed = 1.7
+shader_parameter/interlace_strength = 0.02
+shader_parameter/lock_patterns_to_pixels = true
+shader_parameter/vignette_strength = 0.25
+shader_parameter/noise_strength = 0.05
+shader_parameter/chroma_strength = 0.6
+shader_parameter/curvature_strength = 0.06
+shader_parameter/soften_strength = 0.2
+shader_parameter/soften_radius_px = 1.0
+shader_parameter/glitch_probability_per_second = 0.022
+shader_parameter/glitch_duration = 0.18
+shader_parameter/glitch_strength = 0.55
+
+[node name="Contract" type="Node2D" unique_id=1606529292]
+script = ExtResource("1_ypm2n")
+next_scene = ExtResource("2_grrl1")
+
+[node name="Background" type="ColorRect" parent="." unique_id=271534866]
+offset_right = 338.0
+offset_bottom = 241.0
+color = Color(0.13333334, 0.13725491, 0.13725491, 1)
+
+[node name="Hud" type="CanvasLayer" parent="." unique_id=2125796130]
+
+[node name="Label" type="Label" parent="Hud" unique_id=55800458]
+offset_right = 40.0
+offset_bottom = 23.0
+text = "“DetKing offers…”"
+
+[node name="Label2" type="Label" parent="Hud" unique_id=1791845119]
+offset_right = 40.0
+offset_bottom = 23.0
+
+[node name="PostFX" type="CanvasLayer" parent="." unique_id=1471383609]
+script = ExtResource("3_81vop")
+
+[node name="ColorRect" type="ColorRect" parent="PostFX" unique_id=1682318393]
+material = SubResource("ShaderMaterial_4rr2b")
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
