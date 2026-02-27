@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://cbjsobhk7y54s"]
 
-[ext_resource type="Script" uid="uid://bgp2fxfgkkwfv" path="res://scenes/title.gd" id="1_ypm2n"]
+[ext_resource type="Script" uid="uid://cpn17ry4673g" path="res://scenes/contract.gd" id="1_ypm2n"]
 [ext_resource type="PackedScene" uid="uid://cnov2a6ggkd7i" path="res://scenes/main.tscn" id="2_grrl1"]
 [ext_resource type="Script" uid="uid://5615wb1tsgqv" path="res://scenes/CRTController_Title.gd" id="3_81vop"]
 [ext_resource type="Shader" uid="uid://dffsrlv0h7r5j" path="res://scenes/title.gdshader" id="4_34sri"]
@@ -36,9 +36,15 @@ shader_parameter/soften_radius_px = 1.0
 shader_parameter/glitch_probability_per_second = 0.022
 shader_parameter/glitch_duration = 0.18
 shader_parameter/glitch_strength = 0.55
+shader_parameter/warmup_enabled = true
+shader_parameter/warmup_duration_sec = 2.0
+shader_parameter/warmup_glow_strength = 0.85
+shader_parameter/warmup_squeeze_strength = 0.75
+shader_parameter/warmup_blackout_strength = 0.65
 
 [node name="Contract" type="Node2D" unique_id=1606529292]
 script = ExtResource("1_ypm2n")
+label_path = NodePath("Hud/ContractLabel")
 next_scene = ExtResource("2_grrl1")
 
 [node name="Background" type="ColorRect" parent="." unique_id=271534866]
@@ -48,14 +54,11 @@ color = Color(0.13333334, 0.13725491, 0.13725491, 1)
 
 [node name="Hud" type="CanvasLayer" parent="." unique_id=2125796130]
 
-[node name="Label" type="Label" parent="Hud" unique_id=55800458]
+[node name="ContractLabel" type="Label" parent="Hud" unique_id=55800458]
 offset_right = 40.0
 offset_bottom = 23.0
+theme_override_font_sizes/font_size = 12
 text = "“DetKing offers…”"
-
-[node name="Label2" type="Label" parent="Hud" unique_id=1791845119]
-offset_right = 40.0
-offset_bottom = 23.0
 
 [node name="PostFX" type="CanvasLayer" parent="." unique_id=1471383609]
 script = ExtResource("3_81vop")
