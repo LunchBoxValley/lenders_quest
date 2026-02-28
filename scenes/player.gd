@@ -43,13 +43,34 @@ signal turn_taken(player_grid_pos: Vector2i)
 @export var empty_cells_are_blocked: bool = false
 
 # ------------------------------------------------
-# NEW: Hazard tiles (spikes, lava, etc.)
+# Hazard tiles (spikes, lava, etc.)
 # ------------------------------------------------
 @export var hazard_custom_key: StringName = &"hazard"
 @export var hazard_damage_key: StringName = &"hazard_damage"
 @export var hazard_default_damage: int = 1
 @export var hazard_hitstop_frames: int = 1
 @export var hazard_shake_strength: float = 1.5
+
+# ------------------------------------------------
+# Treasure tiles (HIDDEN + REVEAL)
+# ------------------------------------------------
+@export var treasure_custom_key: StringName = &"treasure"
+
+# Atlas coords you provided:
+@export var treasure_atlas_coords: Vector2i = Vector2i(1, 0)
+@export var floor_atlas_coords: Vector2i = Vector2i(2, 0)
+
+# Usually 0; keep exported in case your source id differs
+@export var tile_source_id: int = 0
+
+# Reveal radius in tiles
+@export var treasure_reveal_radius: int = 3
+
+# ------------------------------------------------
+# Exit tile -> Settlement
+# ------------------------------------------------
+@export var exit_custom_key: StringName = &"exit"
+@export var settlement_scene: PackedScene
 
 var map: TileMapLayer
 var enemy: Node
@@ -59,6 +80,9 @@ var grid_pos: Vector2i
 var hp: int
 var _hit_flash_playing: bool = false
 var _busy: bool = false
+
+# Hidden treasure positions (stored at start)
+var _hidden_treasures: Array[Vector2i] = []
 
 @onready var body: Sprite2D = $Sprite2D
 
@@ -73,6 +97,9 @@ func _ready() -> void:
 	var local_pos: Vector2 = map.to_local(global_position)
 	grid_pos = map.local_to_map(local_pos + Vector2(tile_size * 0.5, tile_size * 0.5))
 	global_position = map.to_global(map.map_to_local(grid_pos))
+
+	_cache_and_hide_treasures()
+	_reveal_treasures_near(grid_pos, treasure_reveal_radius)
 
 	queue_redraw()
 
@@ -109,7 +136,7 @@ func try_move_or_attack(dir: Vector2i) -> void:
 
 	var next: Vector2i = grid_pos + dir
 
-	# --- Attack ---
+	# --- Bump attack ---
 	if enemy != null and enemy.has_method("get_grid_pos") and enemy.has_method("take_damage"):
 		var enemy_grid: Vector2i = enemy.get_grid_pos()
 		if enemy_grid == next:
@@ -145,11 +172,116 @@ func try_move_or_attack(dir: Vector2i) -> void:
 
 	_spawn_step_dust(dir)
 
-	# --- NEW: Hazard check on landing ---
-	await _apply_hazard_if_needed(grid_pos)
+	# Reveal before pickup (so treasure becomes visible when close)
+	_reveal_treasures_near(grid_pos, treasure_reveal_radius)
 
+	# Hazard + treasure checks
+	await _apply_hazard_if_needed(grid_pos)
+	_apply_treasure_if_needed(grid_pos)
+
+	# End turn (GameManager debt tick happens here)
 	_busy = false
 	turn_taken.emit(grid_pos)
+
+	# Exit check (after turn tick so settlement uses updated debt/turn)
+	_apply_exit_if_needed(grid_pos)
+
+
+# ------------------------------------------------
+# Treasure: hide + reveal
+# ------------------------------------------------
+func _cache_and_hide_treasures() -> void:
+	_hidden_treasures.clear()
+
+	var cells: Array[Vector2i] = map.get_used_cells()
+	for cell in cells:
+		var sid: int = map.get_cell_source_id(cell)
+		if sid != tile_source_id:
+			continue
+
+		var ac: Vector2i = map.get_cell_atlas_coords(cell)
+		if ac == treasure_atlas_coords:
+			_hidden_treasures.append(cell)
+			map.set_cell(cell, tile_source_id, floor_atlas_coords, 0)
+
+
+func _reveal_treasures_near(center: Vector2i, radius: int) -> void:
+	if _hidden_treasures.is_empty():
+		return
+
+	var still_hidden: Array[Vector2i] = []
+	for pos in _hidden_treasures:
+		var dist: int = abs(pos.x - center.x) + abs(pos.y - center.y) # Manhattan
+		if dist <= radius:
+			map.set_cell(pos, tile_source_id, treasure_atlas_coords, 0)
+		else:
+			still_hidden.append(pos)
+
+	_hidden_treasures = still_hidden
+
+
+func _apply_treasure_if_needed(tile: Vector2i) -> void:
+	var td: TileData = map.get_cell_tile_data(tile)
+	if td == null:
+		return
+
+	var is_treasure: bool = bool(td.get_custom_data(treasure_custom_key))
+	if not is_treasure:
+		return
+
+	var value: int = GameManager.roll_treasure_value()
+	GameManager.found_treasure(value)
+
+	# Replace with normal floor after pickup
+	map.set_cell(tile, tile_source_id, floor_atlas_coords, 0)
+
+
+# ------------------------------------------------
+# Exit -> Settlement
+# ------------------------------------------------
+func _apply_exit_if_needed(tile: Vector2i) -> void:
+	var td: TileData = map.get_cell_tile_data(tile)
+	if td == null:
+		return
+
+	var is_exit: bool = bool(td.get_custom_data(exit_custom_key))
+	if not is_exit:
+		return
+
+	if settlement_scene != null:
+		get_tree().change_scene_to_packed(settlement_scene)
+
+
+# ------------------------------------------------
+# Existing helpers
+# ------------------------------------------------
+func _crosses_room_boundary(from_tile: Vector2i, to_tile: Vector2i) -> bool:
+	var room_w_tiles: int = maxi(1, int(floor(float(room_width_px) / float(tile_size))))
+	var room_h_tiles: int = maxi(1, int(floor(float(room_height_px) / float(tile_size))))
+
+	var from_room := Vector2i(
+		int(floor(float(from_tile.x) / float(room_w_tiles))),
+		int(floor(float(from_tile.y) / float(room_h_tiles)))
+	)
+	var to_room := Vector2i(
+		int(floor(float(to_tile.x) / float(room_w_tiles))),
+		int(floor(float(to_tile.y) / float(room_h_tiles)))
+	)
+	return from_room != to_room
+
+
+func _is_blocked(tile: Vector2i) -> bool:
+	var td: TileData = map.get_cell_tile_data(tile)
+	if td == null:
+		return empty_cells_are_blocked
+	return bool(td.get_custom_data("blocked"))
+
+
+func _is_door(tile: Vector2i) -> bool:
+	var td: TileData = map.get_cell_tile_data(tile)
+	if td == null:
+		return false
+	return bool(td.get_custom_data(door_custom_key))
 
 
 func _apply_hazard_if_needed(tile: Vector2i) -> void:
@@ -166,45 +298,12 @@ func _apply_hazard_if_needed(tile: Vector2i) -> void:
 	if typeof(raw) == TYPE_INT:
 		dmg = int(raw)
 
-	# Apply damage + small feedback
 	take_damage(dmg)
 
-	# Optional extra juice for hazards (small)
 	_do_shake(hazard_shake_strength)
 	var frames: int = maxi(1, hazard_hitstop_frames)
 	for _i in range(frames):
 		await get_tree().process_frame
-
-
-func _crosses_room_boundary(from_tile: Vector2i, to_tile: Vector2i) -> bool:
-	var room_w_tiles: int = maxi(1, int(floor(float(room_width_px) / float(tile_size))))
-	var room_h_tiles: int = maxi(1, int(floor(float(room_height_px) / float(tile_size))))
-
-	var from_room := Vector2i(
-		int(floor(float(from_tile.x) / float(room_w_tiles))),
-		int(floor(float(from_tile.y) / float(room_h_tiles)))
-	)
-
-	var to_room := Vector2i(
-		int(floor(float(to_tile.x) / float(room_w_tiles))),
-		int(floor(float(to_tile.y) / float(room_h_tiles)))
-	)
-
-	return from_room != to_room
-
-
-func _is_blocked(tile: Vector2i) -> bool:
-	var td: TileData = map.get_cell_tile_data(tile)
-	if td == null:
-		return empty_cells_are_blocked
-	return bool(td.get_custom_data("blocked"))
-
-
-func _is_door(tile: Vector2i) -> bool:
-	var td: TileData = map.get_cell_tile_data(tile)
-	if td == null:
-		return false
-	return bool(td.get_custom_data(door_custom_key))
 
 
 func get_grid_pos() -> Vector2i:
