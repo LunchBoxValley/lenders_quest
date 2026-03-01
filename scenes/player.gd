@@ -57,6 +57,14 @@ signal turn_taken(player_grid_pos: Vector2i)
 
 @export var potion_heal_amount: int = 3
 
+# ----------------------------
+# Manual swing settings
+# ----------------------------
+@export var manual_swing_bonus_damage: int = 1
+@export var swing_time: float = 0.08
+@export var swing_return_time: float = 0.06
+@export var swing_degrees: float = 65.0
+
 var map: TileMapLayer
 var enemy: Node
 var cam: Node
@@ -74,9 +82,13 @@ var _attack_bonus: int = 0
 var _hazard_reduction: int = 0
 var _potion_charges: int = 0
 
-# NEW: visuals + sword
+# Equipped state + facing
+var _has_sword: bool = false
+var _facing: Vector2i = Vector2i(1, 0) # default face right
+
 @onready var visual: Node2D = $Visual
 @onready var body: Sprite2D = $Visual/Body
+@onready var hand_socket: Marker2D = $Visual/HandSocket
 @onready var sword_sprite: Sprite2D = $Visual/HandSocket/SwordSprite
 
 
@@ -86,7 +98,6 @@ func _ready() -> void:
 	cam = get_node_or_null(camera_path)
 
 	hp = max_hp
-
 	_apply_loadout_from_shop()
 
 	var local_pos: Vector2 = map.to_local(global_position)
@@ -103,14 +114,15 @@ func _apply_loadout_from_shop() -> void:
 	_attack_bonus = 0
 	_hazard_reduction = 0
 	_potion_charges = 0
+	_has_sword = false
 
-	# Hide sword by default
 	if sword_sprite != null:
 		sword_sprite.visible = false
 
 	# 0 none, 1 sword, 2 boots, 3 potion
 	if GameManager.shop_item_id == 1:
 		_attack_bonus = 1
+		_has_sword = true
 		if sword_sprite != null:
 			sword_sprite.visible = true
 	elif GameManager.shop_item_id == 2:
@@ -123,6 +135,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _busy or _dead:
 		return
 
+	# Manual sword swing (Space/Enter default is ui_accept)
+	if event.is_action_pressed("ui_accept"):
+		await _try_manual_swing()
+		return
+
 	# Potion use: press H
 	if event is InputEventKey and event.pressed and not event.echo:
 		var kc: Key = (event as InputEventKey).keycode
@@ -131,7 +148,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 
 	var dir: Vector2i = Vector2i.ZERO
-
 	if event.is_action_pressed("ui_right"):
 		dir = Vector2i(1, 0)
 	elif event.is_action_pressed("ui_left"):
@@ -143,6 +159,48 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if dir != Vector2i.ZERO:
 		await try_move_or_attack(dir)
+
+
+func _try_manual_swing() -> void:
+	if not _has_sword:
+		return
+
+	_busy = true
+
+	await _do_swing_anim()
+
+	var target_tile: Vector2i = grid_pos + _facing
+
+	var hit: bool = false
+	if enemy != null and enemy.has_method("get_grid_pos") and enemy.has_method("take_damage"):
+		var enemy_grid: Vector2i = enemy.get_grid_pos()
+		if enemy_grid == target_tile:
+			var dmg: int = randi_range(damage_min, damage_max) + _attack_bonus + manual_swing_bonus_damage
+			enemy.take_damage(dmg)
+			hit = true
+
+	if hit:
+		_do_shake(shake_on_hit_strength)
+		await _do_hitstop()
+
+	_busy = false
+
+	# Swing costs a turn
+	turn_taken.emit(grid_pos)
+
+
+func _do_swing_anim() -> void:
+	if hand_socket == null:
+		return
+
+	hand_socket.rotation_degrees = 0.0
+
+	# FIX: because Visual is mirrored with scale.x = -1 when facing left,
+	# we swing the SAME rotation direction for both sides.
+	var tw := create_tween()
+	tw.tween_property(hand_socket, "rotation_degrees", swing_degrees, swing_time).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(hand_socket, "rotation_degrees", 0.0, swing_return_time).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	await tw.finished
 
 
 func _try_use_potion() -> void:
@@ -167,7 +225,9 @@ func try_move_or_attack(dir: Vector2i) -> void:
 
 	_busy = true
 
-	# NEW: flip the whole Visual so sword follows
+	_facing = dir
+
+	# Flip visual so sword follows
 	if dir.x < 0:
 		visual.scale.x = -1.0
 	elif dir.x > 0:
@@ -175,7 +235,7 @@ func try_move_or_attack(dir: Vector2i) -> void:
 
 	var next: Vector2i = grid_pos + dir
 
-	# Bump attack
+	# Bump attack (quick jab)
 	if enemy != null and enemy.has_method("get_grid_pos") and enemy.has_method("take_damage"):
 		var enemy_grid: Vector2i = enemy.get_grid_pos()
 		if enemy_grid == next:
