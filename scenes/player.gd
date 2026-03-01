@@ -31,7 +31,7 @@ signal turn_taken(player_grid_pos: Vector2i)
 @export var shake_on_hurt_strength: float = 1.5
 @export var shake_frames: int = 2
 
-# Swing shake (even on miss) - boosted defaults
+# Swing shake (even on miss)
 @export var shake_on_swing_strength: float = 4.0
 @export var shake_on_swing_frames: int = 8
 
@@ -70,10 +70,19 @@ signal turn_taken(player_grid_pos: Vector2i)
 @export var swing_degrees: float = 65.0
 
 # ----------------------------
-# Sword swoosh + hit spark
+# Swoosh + spark
 # ----------------------------
 @export var sword_swoosh_scene: PackedScene
 @export var hit_spark_scene: PackedScene
+
+# ----------------------------
+# NEW: Extraction Mode UI + Exit blink
+# ----------------------------
+@export var toast_label_path: NodePath
+@export var toast_duration_sec: float = 1.2
+
+@export var exit_blink_enabled: bool = true
+@export var exit_blink_period_sec: float = 0.25
 
 var map: TileMapLayer
 var enemy: Node
@@ -86,6 +95,15 @@ var _busy: bool = false
 var _dead: bool = false
 
 var _hidden_treasures: Array[Vector2i] = []
+
+# Exit tiles cache for blinking
+var _exit_tiles: Array[Dictionary] = []
+var _exit_blink_running: bool = false
+var _exit_blink_show_exit: bool = true
+
+# Toast
+var _toast_label: Label
+var _toast_token: int = 0
 
 # Loadout effects
 var _attack_bonus: int = 0
@@ -108,6 +126,9 @@ func _ready() -> void:
 	enemy = get_node_or_null(enemy_path)
 	cam = get_node_or_null(camera_path)
 
+	_toast_label = get_node_or_null(toast_label_path) as Label
+	_clear_toast()
+
 	hp = max_hp
 	_apply_loadout_from_shop()
 
@@ -115,6 +136,7 @@ func _ready() -> void:
 	grid_pos = map.local_to_map(local_pos + Vector2(tile_size * 0.5, tile_size * 0.5))
 	global_position = map.to_global(map.map_to_local(grid_pos))
 
+	_cache_exit_tiles()
 	_cache_and_hide_treasures()
 	_reveal_treasures_near(grid_pos, treasure_reveal_radius)
 
@@ -175,11 +197,11 @@ func _try_manual_swing() -> void:
 
 	_busy = true
 
-	# Visible shake even on miss
+	# visible shake even on miss
 	if cam != null and cam.has_method("shake"):
 		cam.shake(shake_on_swing_strength, shake_on_swing_frames)
 
-	# Swoosh even on miss
+	# swoosh even on miss
 	if sword_swoosh_scene != null and sword_tip != null:
 		var swoosh := sword_swoosh_scene.instantiate()
 		get_parent().add_child(swoosh)
@@ -190,19 +212,14 @@ func _try_manual_swing() -> void:
 
 	var target_tile: Vector2i = grid_pos + _facing
 
-	var hit: bool = false
 	if enemy != null and enemy.has_method("get_grid_pos") and enemy.has_method("take_damage"):
 		var enemy_grid: Vector2i = enemy.get_grid_pos()
 		if enemy_grid == target_tile:
 			var dmg: int = randi_range(damage_min, damage_max) + _attack_bonus + manual_swing_bonus_damage
 			enemy.take_damage(dmg)
-			hit = true
-
 			_spawn_hit_spark(enemy.global_position)
-
-	if hit:
-		_do_shake(shake_on_hit_strength)
-		await _do_hitstop()
+			_do_shake(shake_on_hit_strength)
+			await _do_hitstop()
 
 	_busy = false
 	turn_taken.emit(grid_pos)
@@ -255,35 +272,30 @@ func try_move_or_attack(dir: Vector2i) -> void:
 
 	var next: Vector2i = grid_pos + dir
 
-	# Bump attack (quick jab)
+	# bump attack (quick jab)
 	if enemy != null and enemy.has_method("get_grid_pos") and enemy.has_method("take_damage"):
 		var enemy_grid: Vector2i = enemy.get_grid_pos()
 		if enemy_grid == next:
 			var dmg: int = randi_range(damage_min, damage_max) + _attack_bonus
 			enemy.take_damage(dmg)
-
 			_spawn_hit_spark(enemy.global_position)
-
 			_do_shake(shake_on_hit_strength)
 			await _do_hitstop()
-
 			_busy = false
 			turn_taken.emit(grid_pos)
 			return
 
-	# Door check crossing rooms
 	if edge_transition_requires_door and _crosses_room_boundary(grid_pos, next):
 		var ok: bool = _is_door(grid_pos) or _is_door(next)
 		if not ok:
 			_busy = false
 			return
 
-	# Collision
 	if _is_blocked(next):
 		_busy = false
 		return
 
-	# Move
+	# move
 	grid_pos = next
 	var target_global: Vector2 = map.to_global(map.map_to_local(grid_pos))
 
@@ -300,6 +312,93 @@ func try_move_or_attack(dir: Vector2i) -> void:
 	_busy = false
 	turn_taken.emit(grid_pos)
 	_apply_exit_if_needed(grid_pos)
+
+
+# ----------------------------
+# Extraction Mode: toast + exit blink
+# ----------------------------
+func _enter_extraction_mode() -> void:
+	_show_toast("TREASURE FOUND!\nESCAPE!", toast_duration_sec)
+
+	if exit_blink_enabled and not _exit_blink_running and _exit_tiles.size() > 0:
+		_exit_blink_running = true
+		_exit_blink_show_exit = true
+		_exit_blink_loop()
+
+
+func _exit_blink_loop() -> void:
+	# fire-and-forget coroutine
+	while is_inside_tree() and not _dead and GameManager.has_treasure:
+		_exit_blink_show_exit = not _exit_blink_show_exit
+
+		if _exit_blink_show_exit:
+			_restore_exit_tiles()
+		else:
+			_hide_exit_tiles_as_floor()
+
+		var tree := get_tree()
+		if tree == null:
+			break
+		await tree.create_timer(exit_blink_period_sec).timeout
+
+	# ensure exit ends visible
+	if is_inside_tree():
+		_restore_exit_tiles()
+
+	_exit_blink_running = false
+
+
+func _cache_exit_tiles() -> void:
+	_exit_tiles.clear()
+	var cells: Array[Vector2i] = map.get_used_cells()
+	for cell in cells:
+		var td: TileData = map.get_cell_tile_data(cell)
+		if td == null:
+			continue
+		if bool(td.get_custom_data(exit_custom_key)):
+			_exit_tiles.append({
+				"pos": cell,
+				"sid": map.get_cell_source_id(cell),
+				"ac": map.get_cell_atlas_coords(cell),
+				"alt": map.get_cell_alternative_tile(cell),
+			})
+
+
+func _restore_exit_tiles() -> void:
+	for e in _exit_tiles:
+		var p: Vector2i = e["pos"]
+		map.set_cell(p, int(e["sid"]), e["ac"], int(e["alt"]))
+
+
+func _hide_exit_tiles_as_floor() -> void:
+	for e in _exit_tiles:
+		var p: Vector2i = e["pos"]
+		map.set_cell(p, tile_source_id, floor_atlas_coords, 0)
+
+
+func _show_toast(text: String, sec: float) -> void:
+	if _toast_label == null:
+		return
+	_toast_token += 1
+	var my_token := _toast_token
+
+	_toast_label.text = text
+	_toast_label.visible = true
+
+	var tree := get_tree()
+	if tree == null:
+		return
+	await tree.create_timer(sec).timeout
+
+	# only clear if no newer toast replaced it
+	if my_token == _toast_token:
+		_clear_toast()
+
+
+func _clear_toast() -> void:
+	if _toast_label == null:
+		return
+	_toast_label.text = ""
 
 
 # ----------------------------
@@ -335,12 +434,17 @@ func _apply_treasure_if_needed(tile: Vector2i) -> void:
 	var td: TileData = map.get_cell_tile_data(tile)
 	if td == null:
 		return
+
 	var is_treasure: bool = bool(td.get_custom_data(treasure_custom_key))
 	if not is_treasure:
 		return
+
 	var value: int = GameManager.roll_treasure_value()
 	GameManager.found_treasure(value)
 	map.set_cell(tile, tile_source_id, floor_atlas_coords, 0)
+
+	# NEW: extraction mode kicks in here
+	_enter_extraction_mode()
 
 
 # ----------------------------
