@@ -31,9 +31,6 @@ signal turn_taken(player_grid_pos: Vector2i)
 @export var shake_on_hurt_strength: float = 1.5
 @export var shake_frames: int = 2
 
-# ------------------------------------------------
-# Zelda-style edge control (default = open world)
-# ------------------------------------------------
 @export var edge_transition_requires_door: bool = false
 @export var door_custom_key: StringName = &"door"
 
@@ -42,35 +39,24 @@ signal turn_taken(player_grid_pos: Vector2i)
 
 @export var empty_cells_are_blocked: bool = false
 
-# ------------------------------------------------
-# Hazard tiles (spikes, lava, etc.)
-# ------------------------------------------------
 @export var hazard_custom_key: StringName = &"hazard"
 @export var hazard_damage_key: StringName = &"hazard_damage"
 @export var hazard_default_damage: int = 1
 @export var hazard_hitstop_frames: int = 1
 @export var hazard_shake_strength: float = 1.5
 
-# ------------------------------------------------
-# Treasure tiles (HIDDEN + REVEAL)
-# ------------------------------------------------
 @export var treasure_custom_key: StringName = &"treasure"
-
-# Atlas coords you provided:
 @export var treasure_atlas_coords: Vector2i = Vector2i(1, 0)
 @export var floor_atlas_coords: Vector2i = Vector2i(2, 0)
-
-# Usually 0; keep exported in case your source id differs
 @export var tile_source_id: int = 0
-
-# Reveal radius in tiles
 @export var treasure_reveal_radius: int = 3
 
-# ------------------------------------------------
-# Exit tile -> Settlement
-# ------------------------------------------------
 @export var exit_custom_key: StringName = &"exit"
 @export var settlement_scene: PackedScene
+@export var death_delay_sec: float = 0.30
+
+# NEW: potion use key
+@export var potion_heal_amount: int = 3
 
 var map: TileMapLayer
 var enemy: Node
@@ -80,9 +66,14 @@ var grid_pos: Vector2i
 var hp: int
 var _hit_flash_playing: bool = false
 var _busy: bool = false
+var _dead: bool = false
 
-# Hidden treasure positions (stored at start)
 var _hidden_treasures: Array[Vector2i] = []
+
+# NEW: loadout effects
+var _attack_bonus: int = 0
+var _hazard_reduction: int = 0
+var _potion_charges: int = 0
 
 @onready var body: Sprite2D = $Sprite2D
 
@@ -94,6 +85,8 @@ func _ready() -> void:
 
 	hp = max_hp
 
+	_apply_loadout_from_shop()
+
 	var local_pos: Vector2 = map.to_local(global_position)
 	grid_pos = map.local_to_map(local_pos + Vector2(tile_size * 0.5, tile_size * 0.5))
 	global_position = map.to_global(map.map_to_local(grid_pos))
@@ -104,9 +97,30 @@ func _ready() -> void:
 	queue_redraw()
 
 
+func _apply_loadout_from_shop() -> void:
+	_attack_bonus = 0
+	_hazard_reduction = 0
+	_potion_charges = 0
+
+	# 0 none, 1 sword, 2 boots, 3 potion
+	if GameManager.shop_item_id == 1:
+		_attack_bonus = 1
+	elif GameManager.shop_item_id == 2:
+		_hazard_reduction = 1
+	elif GameManager.shop_item_id == 3:
+		_potion_charges = 1
+
+
 func _unhandled_input(event: InputEvent) -> void:
-	if _busy:
+	if _busy or _dead:
 		return
+
+	# Potion use: press H (raw key)
+	if event is InputEventKey and event.pressed and not event.echo:
+		var kc: Key = (event as InputEventKey).keycode
+		if kc == KEY_H:
+			await _try_use_potion()
+			return
 
 	var dir: Vector2i = Vector2i.ZERO
 
@@ -123,8 +137,25 @@ func _unhandled_input(event: InputEvent) -> void:
 		await try_move_or_attack(dir)
 
 
+func _try_use_potion() -> void:
+	if _potion_charges <= 0:
+		return
+	if hp >= max_hp:
+		return
+
+	_busy = true
+
+	hp = min(max_hp, hp + potion_heal_amount)
+	_potion_charges -= 1
+	queue_redraw()
+
+	# Using a potion costs a turn (keeps strategy fair)
+	_busy = false
+	turn_taken.emit(grid_pos)
+
+
 func try_move_or_attack(dir: Vector2i) -> void:
-	if map == null:
+	if map == null or _dead:
 		return
 
 	_busy = true
@@ -136,11 +167,11 @@ func try_move_or_attack(dir: Vector2i) -> void:
 
 	var next: Vector2i = grid_pos + dir
 
-	# --- Bump attack ---
+	# Bump attack
 	if enemy != null and enemy.has_method("get_grid_pos") and enemy.has_method("take_damage"):
 		var enemy_grid: Vector2i = enemy.get_grid_pos()
 		if enemy_grid == next:
-			var dmg: int = randi_range(damage_min, damage_max)
+			var dmg: int = randi_range(damage_min, damage_max) + _attack_bonus
 			enemy.take_damage(dmg)
 
 			_do_shake(shake_on_hit_strength)
@@ -150,19 +181,19 @@ func try_move_or_attack(dir: Vector2i) -> void:
 			turn_taken.emit(grid_pos)
 			return
 
-	# --- Door requirement only when crossing to a new room ---
+	# Door check crossing rooms
 	if edge_transition_requires_door and _crosses_room_boundary(grid_pos, next):
 		var ok: bool = _is_door(grid_pos) or _is_door(next)
 		if not ok:
 			_busy = false
 			return
 
-	# --- Collision ---
+	# Collision
 	if _is_blocked(next):
 		_busy = false
 		return
 
-	# --- Move ---
+	# Move
 	grid_pos = next
 	var target_global: Vector2 = map.to_global(map.map_to_local(grid_pos))
 
@@ -172,24 +203,17 @@ func try_move_or_attack(dir: Vector2i) -> void:
 
 	_spawn_step_dust(dir)
 
-	# Reveal before pickup (so treasure becomes visible when close)
 	_reveal_treasures_near(grid_pos, treasure_reveal_radius)
 
-	# Hazard + treasure checks
 	await _apply_hazard_if_needed(grid_pos)
 	_apply_treasure_if_needed(grid_pos)
 
-	# End turn (GameManager debt tick happens here)
 	_busy = false
 	turn_taken.emit(grid_pos)
 
-	# Exit check (after turn tick so settlement uses updated debt/turn)
 	_apply_exit_if_needed(grid_pos)
 
 
-# ------------------------------------------------
-# Treasure: hide + reveal
-# ------------------------------------------------
 func _cache_and_hide_treasures() -> void:
 	_hidden_treasures.clear()
 
@@ -211,7 +235,7 @@ func _reveal_treasures_near(center: Vector2i, radius: int) -> void:
 
 	var still_hidden: Array[Vector2i] = []
 	for pos in _hidden_treasures:
-		var dist: int = abs(pos.x - center.x) + abs(pos.y - center.y) # Manhattan
+		var dist: int = abs(pos.x - center.x) + abs(pos.y - center.y)
 		if dist <= radius:
 			map.set_cell(pos, tile_source_id, treasure_atlas_coords, 0)
 		else:
@@ -232,13 +256,9 @@ func _apply_treasure_if_needed(tile: Vector2i) -> void:
 	var value: int = GameManager.roll_treasure_value()
 	GameManager.found_treasure(value)
 
-	# Replace with normal floor after pickup
 	map.set_cell(tile, tile_source_id, floor_atlas_coords, 0)
 
 
-# ------------------------------------------------
-# Exit -> Settlement
-# ------------------------------------------------
 func _apply_exit_if_needed(tile: Vector2i) -> void:
 	var td: TileData = map.get_cell_tile_data(tile)
 	if td == null:
@@ -248,13 +268,15 @@ func _apply_exit_if_needed(tile: Vector2i) -> void:
 	if not is_exit:
 		return
 
+	if not GameManager.has_treasure:
+		GameManager.death_reason = "flee"
+	else:
+		GameManager.death_reason = "none"
+
 	if settlement_scene != null:
 		get_tree().change_scene_to_packed(settlement_scene)
 
 
-# ------------------------------------------------
-# Existing helpers
-# ------------------------------------------------
 func _crosses_room_boundary(from_tile: Vector2i, to_tile: Vector2i) -> bool:
 	var room_w_tiles: int = maxi(1, int(floor(float(room_width_px) / float(tile_size))))
 	var room_h_tiles: int = maxi(1, int(floor(float(room_height_px) / float(tile_size))))
@@ -298,7 +320,10 @@ func _apply_hazard_if_needed(tile: Vector2i) -> void:
 	if typeof(raw) == TYPE_INT:
 		dmg = int(raw)
 
-	take_damage(dmg)
+	# NEW: boots reduce hazard damage
+	dmg = max(0, dmg - _hazard_reduction)
+
+	await take_damage(dmg)
 
 	_do_shake(hazard_shake_strength)
 	var frames: int = maxi(1, hazard_hitstop_frames)
@@ -328,6 +353,9 @@ func _spawn_step_dust(move_dir: Vector2i) -> void:
 
 
 func take_damage(amount: int) -> void:
+	if _dead:
+		return
+
 	hp -= amount
 	hp = max(hp, 0)
 
@@ -338,7 +366,21 @@ func take_damage(amount: int) -> void:
 	await _do_hitstop()
 
 	if hp <= 0:
-		queue_free()
+		await _die_hp()
+
+
+func _die_hp() -> void:
+	if _dead:
+		return
+	_dead = true
+	_busy = true
+
+	GameManager.death_reason = "hp"
+
+	await get_tree().create_timer(death_delay_sec).timeout
+
+	if settlement_scene != null:
+		get_tree().change_scene_to_packed(settlement_scene)
 
 
 func _do_shake(strength: float) -> void:
@@ -381,9 +423,7 @@ func _draw() -> void:
 
 	for i in range(total_segments):
 		var x: float = start_x + float(i * (hp_seg_w + hp_seg_gap))
-
 		var col: Color = Color(0.35, 0.35, 0.35, 1)
 		if i < filled_segments:
 			col = Color(1, 1, 1, 1)
-
 		draw_rect(Rect2(Vector2(x, bar_y), Vector2(float(hp_seg_w), float(hp_seg_h))), col, true)

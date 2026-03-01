@@ -8,8 +8,6 @@ var _label: Label
 var _start_ms: int = 0
 var _armed: bool = false
 var _was_down: bool = false
-
-# Keys we consider "any key" (covers typical presses)
 var _keys: Array[int] = []
 
 
@@ -26,7 +24,7 @@ func _ready() -> void:
 
 	_start_ms = Time.get_ticks_msec()
 	_armed = false
-	_was_down = _any_key_down()  # capture current state so we require a NEW press
+	_was_down = _any_key_down()
 
 
 func _process(_delta: float) -> void:
@@ -37,11 +35,8 @@ func _process(_delta: float) -> void:
 		return
 
 	var down: bool = _any_key_down()
-
-	# rising edge = new press
 	if down and not _was_down:
 		_go_next()
-
 	_was_down = down
 
 
@@ -54,8 +49,6 @@ func _any_key_down() -> bool:
 
 func _build_key_list() -> void:
 	_keys.clear()
-
-	# Arrows + common confirm/cancel
 	_keys.append(KEY_UP)
 	_keys.append(KEY_DOWN)
 	_keys.append(KEY_LEFT)
@@ -67,15 +60,10 @@ func _build_key_list() -> void:
 	_keys.append(KEY_TAB)
 	_keys.append(KEY_BACKSPACE)
 
-	# Numbers 0-9
 	for k in range(KEY_0, KEY_9 + 1):
 		_keys.append(k)
-
-	# Letters A-Z
 	for k in range(KEY_A, KEY_Z + 1):
 		_keys.append(k)
-
-	# Function keys (includes F which you know works)
 	for k in range(KEY_F1, KEY_F12 + 1):
 		_keys.append(k)
 
@@ -86,6 +74,7 @@ func _refresh() -> void:
 
 	var s: Dictionary = GameManager.compute_settlement()
 
+	var reason: String = str(s.get("death_reason", "none"))
 	var has_treasure: bool = bool(s.get("has_treasure", false))
 	var ok: bool = bool(s.get("ok", false))
 
@@ -98,7 +87,15 @@ func _refresh() -> void:
 
 	var text: String = ""
 
-	if not has_treasure:
+	if reason == "hp":
+		text += "YOU DIED.\n"
+		text += "\nTREASURE: %s\n" % (str(treasure) if has_treasure else "--")
+		text += "DEBT:     %d\n" % debt
+		text += "----------------\n"
+		text += "NET:      %d\n" % net
+		text += "\nTurns: %d\n" % turns
+		text += "\nDetKing: \"Medical debt is still debt.\""
+	elif not has_treasure:
 		text += "YOU FLEE EMPTY-HANDED!\n"
 		text += "\nTREASURE: --\n"
 		text += "DEBT:     %d\n" % debt
@@ -121,7 +118,6 @@ func _refresh() -> void:
 
 
 func _go_next() -> void:
-	# Deferred is safest when switching scenes from inside _process
 	if next_scene_file == "":
 		if _label != null:
 			_label.text += "\n\n[ERROR] next_scene_file not set."

@@ -36,11 +36,6 @@ shader_parameter/soften_radius_px = 1.0
 shader_parameter/glitch_probability_per_second = 0.022
 shader_parameter/glitch_duration = 0.18
 shader_parameter/glitch_strength = 0.55
-shader_parameter/warmup_enabled = true
-shader_parameter/warmup_duration_sec = 2.0
-shader_parameter/warmup_glow_strength = 0.85
-shader_parameter/warmup_squeeze_strength = 0.75
-shader_parameter/warmup_blackout_strength = 0.65
 
 [node name="Contract" type="Node2D" unique_id=1606529292]
 script = ExtResource("1_ypm2n")
@@ -57,7 +52,7 @@ color = Color(0.13333334, 0.13725491, 0.13725491, 1)
 [node name="ContractLabel" type="Label" parent="Hud" unique_id=55800458]
 offset_right = 40.0
 offset_bottom = 23.0
-theme_override_font_sizes/font_size = 12
+theme_override_font_sizes/font_size = 8
 text = "“DetKing offers…”"
 
 [node name="PostFX" type="CanvasLayer" parent="." unique_id=1471383609]

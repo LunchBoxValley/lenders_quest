@@ -108,7 +108,6 @@ map_path = NodePath("../TileMapLayer")
 player_path = NodePath("../Player")
 camera_path = NodePath("../Player/Camera2D")
 step_dust_scene = ExtResource("3_tbgi4")
-extra_turns_when_player_has_treasure = 3
 
 [node name="Player" parent="." unique_id=318157462 instance=ExtResource("2_0wfyh")]
 position = Vector2(161, 96)
