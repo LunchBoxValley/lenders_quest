@@ -11,7 +11,7 @@ extends Node2D
 
 @export var move_time: float = 0.10
 
-# Telegraph
+# Telegraph (enemy "leans" before hitting)
 @export var telegraph_damage_bonus: int = 1
 @export var telegraph_lean_px: int = 3
 @export var telegraph_lean_time: float = 0.08
@@ -28,10 +28,8 @@ extends Node2D
 @export var hp_seg_h: int = 2
 @export var hp_seg_gap: int = 1
 
-# Hitstop + shake (optional; only used if your camera has shake())
-@export var hitstop_frames: int = 1
-@export var shake_on_hit_strength: float = 2.0
-@export var shake_frames: int = 2
+# NEW: pressure after treasure (1 extra turn => total 2 turns)
+@export var extra_turns_when_player_has_treasure: int = 1
 
 var map: TileMapLayer
 var player: Node
@@ -53,33 +51,42 @@ func _ready() -> void:
 
 	hp = max_hp
 
-	# Snap to the tile you are actually standing on, using the TileMap's transforms.
+	# Snap to grid
 	var local_pos := map.to_local(global_position)
 	grid_pos = map.local_to_map(local_pos + Vector2(tile_size * 0.5, tile_size * 0.5))
 	global_position = map.to_global(map.map_to_local(grid_pos))
 
-	# AUTO-CONNECT to player turn signal so enemy definitely gets turns.
+	# Connect to player turn signal
 	if player != null and player.has_signal("turn_taken"):
-		if not player.is_connected("turn_taken", Callable(self, "_on_player_turn_taken")):
-			player.connect("turn_taken", Callable(self, "_on_player_turn_taken"))
+		var c := Callable(self, "_on_player_turn_taken")
+		if not player.is_connected("turn_taken", c):
+			player.connect("turn_taken", c)
 
 	randomize()
 	queue_redraw()
 
 
 func _on_player_turn_taken(player_grid_pos: Vector2i) -> void:
+	# Normal enemy turn
 	await take_turn(player_grid_pos)
+
+	# EXTRA pressure after treasure pickup
+	if GameManager.has_treasure and extra_turns_when_player_has_treasure > 0:
+		for _i in range(extra_turns_when_player_has_treasure):
+			# Player hasn't moved again yet, so we use the same last known position.
+			await take_turn(player_grid_pos)
 
 
 func take_turn(player_grid_pos: Vector2i) -> void:
-	# If we were telegraphing, attack if still adjacent; otherwise cancel.
+	if player == null:
+		return
+
+	# If we were telegraphing, either attack (if still adjacent) or cancel.
 	if _telegraphing:
 		if _manhattan(grid_pos, player_grid_pos) == 1:
-			if player != null and player.has_method("take_damage"):
+			if player.has_method("take_damage"):
 				var dmg := randi_range(damage_min, damage_max) + telegraph_damage_bonus
 				player.take_damage(dmg)
-				_do_shake(shake_on_hit_strength)
-				await _do_hitstop()
 		_end_telegraph()
 		return
 
@@ -88,7 +95,7 @@ func take_turn(player_grid_pos: Vector2i) -> void:
 		_begin_telegraph(player_grid_pos)
 		return
 
-	# Otherwise, chase.
+	# Otherwise chase
 	var step := _choose_step_toward(player_grid_pos)
 	if step == Vector2i.ZERO:
 		return
@@ -101,7 +108,7 @@ func take_turn(player_grid_pos: Vector2i) -> void:
 
 	var next := grid_pos + step
 	if _is_blocked(next):
-		# If the "best" step is blocked, try the other axis as a fallback.
+		# Fallback axis if blocked
 		var alt := _choose_step_toward(player_grid_pos, true)
 		if alt != Vector2i.ZERO and not _is_blocked(grid_pos + alt):
 			step = alt
@@ -123,18 +130,13 @@ func _choose_step_toward(target: Vector2i, force_other_axis: bool = false) -> Ve
 	var dx := target.x - grid_pos.x
 	var dy := target.y - grid_pos.y
 
-	# Primary axis is the larger distance, unless we force the other axis.
 	if not force_other_axis:
 		if abs(dx) > abs(dy):
 			return Vector2i(sign(dx), 0)
 		elif abs(dy) > abs(dx):
 			return Vector2i(0, sign(dy))
 		else:
-			# Tie: randomize so we don't "bias" and get stuck.
-			if randi() % 2 == 0:
-				return Vector2i(sign(dx), 0)
-			else:
-				return Vector2i(0, sign(dy))
+			return Vector2i(sign(dx), 0) if randi() % 2 == 0 else Vector2i(0, sign(dy))
 	else:
 		# Forced alternate axis
 		if abs(dx) >= abs(dy):
@@ -154,10 +156,7 @@ func _begin_telegraph(player_grid_pos: Vector2i) -> void:
 	elif abs(dy) > abs(dx):
 		_telegraph_dir = Vector2i(0, sign(dy))
 	else:
-		if randi() % 2 == 0:
-			_telegraph_dir = Vector2i(sign(dx), 0)
-		else:
-			_telegraph_dir = Vector2i(0, sign(dy))
+		_telegraph_dir = Vector2i(sign(dx), 0) if randi() % 2 == 0 else Vector2i(0, sign(dy))
 
 	var target := Vector2(_telegraph_dir.x * telegraph_lean_px, _telegraph_dir.y * telegraph_lean_px)
 	var tw := create_tween()
@@ -198,16 +197,6 @@ func _spawn_step_dust(move_dir: Vector2i) -> void:
 		d.global_position = spawn_pos
 
 
-func _do_shake(strength: float) -> void:
-	if cam != null and cam.has_method("shake"):
-		cam.shake(strength, shake_frames)
-
-
-func _do_hitstop() -> void:
-	for _i in range(maxi(1, hitstop_frames)):
-		await get_tree().process_frame
-
-
 func take_damage(amount: int) -> void:
 	hp -= amount
 	hp = max(hp, 0)
@@ -221,6 +210,7 @@ func get_grid_pos() -> Vector2i:
 
 
 func _draw() -> void:
+	# HP bar (white + light grey only)
 	var total_segments: int = int(ceil(float(max_hp) / float(hp_per_segment)))
 	var filled_segments: int = int(ceil(float(hp) / float(hp_per_segment)))
 
@@ -233,9 +223,7 @@ func _draw() -> void:
 
 	for i in range(total_segments):
 		var x: float = start_x + float(i * (hp_seg_w + hp_seg_gap))
-
 		var col: Color = Color(0.35, 0.35, 0.35, 1)
 		if i < filled_segments:
 			col = Color(1, 1, 1, 1)
-
 		draw_rect(Rect2(Vector2(x, bar_y), Vector2(float(hp_seg_w), float(hp_seg_h))), col, true)
