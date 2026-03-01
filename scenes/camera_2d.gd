@@ -1,47 +1,22 @@
 extends Camera2D
 
-@export var room_width_px: int = 320
-@export var room_height_px: int = 192
-@export var room_slide_time: float = 0.12
-
-@export var snap_to_whole_pixels: bool = true
-
-# Optional shake
 @export var default_shake_strength: float = 2.0
 @export var default_shake_frames: int = 2
 
-var _current_room: Vector2i = Vector2i(999999, 999999)
-var _move_tween: Tween
+# NEW: makes shake feel like a quick "kick" instead of wobble
+@export var shake_decay_power: float = 3.0  # higher = snappier fade-out
+@export var snappy_kick_mode: bool = true   # true = kick in one direction (recommended)
 
-var _base_global: Vector2 = Vector2.ZERO
+var _base_pos: Vector2 = Vector2.ZERO
 var _frames_left: int = 0
+var _frames_total: int = 0
 var _strength: float = 0.0
+var _kick_dir: Vector2 = Vector2.RIGHT
 
 
 func _ready() -> void:
-	# We do NOT want to inherit player movement. This is a room camera.
-	top_level = true
+	_base_pos = position
 	randomize()
-	_snap_to_room_of_player()
-	_base_global = global_position
-	_snap_if_needed()
-
-
-func _process(_delta: float) -> void:
-	# Keep room lock logic in _process so it can't desync with step tweens.
-	_update_room_from_player()
-
-	# Shake
-	if _frames_left > 0:
-		global_position = _base_global + Vector2(
-			randf_range(-_strength, _strength),
-			randf_range(-_strength, _strength)
-		)
-		_frames_left -= 1
-		if _frames_left == 0:
-			global_position = _base_global
-
-	_snap_if_needed()
 
 
 func shake(strength: float = -1.0, frames: int = -1) -> void:
@@ -52,62 +27,33 @@ func shake(strength: float = -1.0, frames: int = -1) -> void:
 
 	_strength = strength
 	_frames_left = maxi(1, frames)
-	_base_global = global_position
+	_frames_total = _frames_left
+	_base_pos = position
+
+	# Pick one direction for the whole shake (snappy "kick")
+	var d := Vector2(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0))
+	if d.length() < 0.001:
+		d = Vector2.RIGHT
+	_kick_dir = d.normalized()
 
 
-func _snap_to_room_of_player() -> void:
-	var p: Node = get_parent()
-	if p == null:
+func _process(_delta: float) -> void:
+	if _frames_left <= 0:
 		return
 
-	var r: Vector2i = _room_from_world_pos(p.global_position)
-	_current_room = r
-	global_position = _room_center_world(r)
-	_base_global = global_position
-	_snap_if_needed()
+	# 1.0 -> 0.0 over time
+	var t: float = float(_frames_left) / float(_frames_total)
+	# Fast decay makes it snappy
+	var amp: float = _strength * pow(t, shake_decay_power)
 
+	if snappy_kick_mode:
+		position = _base_pos + (_kick_dir * amp)
+	else:
+		position = _base_pos + Vector2(
+			randf_range(-amp, amp),
+			randf_range(-amp, amp)
+		)
 
-func _update_room_from_player() -> void:
-	var p: Node = get_parent()
-	if p == null:
-		return
-
-	var r: Vector2i = _room_from_world_pos(p.global_position)
-	if r == _current_room:
-		return
-
-	_current_room = r
-	var target: Vector2 = _room_center_world(r)
-
-	# Stop any previous slide.
-	if _move_tween != null and _move_tween.is_valid():
-		_move_tween.kill()
-
-	if snap_to_whole_pixels:
-		target = target.round()
-
-	_move_tween = create_tween()
-	_move_tween.tween_property(self, "global_position", target, room_slide_time).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-
-	# Keep shake base in sync after move finishes.
-	_move_tween.finished.connect(func() -> void:
-		_base_global = global_position
-		_snap_if_needed()
-	)
-
-
-func _room_from_world_pos(world_pos: Vector2) -> Vector2i:
-	var rx: int = int(floor(world_pos.x / float(room_width_px)))
-	var ry: int = int(floor(world_pos.y / float(room_height_px)))
-	return Vector2i(rx, ry)
-
-
-func _room_center_world(room: Vector2i) -> Vector2:
-	var cx: float = float(room.x * room_width_px) + float(room_width_px) * 0.5
-	var cy: float = float(room.y * room_height_px) + float(room_height_px) * 0.5
-	return Vector2(cx, cy)
-
-
-func _snap_if_needed() -> void:
-	if snap_to_whole_pixels:
-		global_position = global_position.round()
+	_frames_left -= 1
+	if _frames_left == 0:
+		position = _base_pos

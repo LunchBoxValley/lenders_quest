@@ -1,0 +1,11 @@
+[gd_scene format=3 uid="uid://c0k764pmfij80"]
+
+[ext_resource type="Script" uid="uid://blqbc46rsxgwk" path="res://scenes/sword_swoosh.gd" id="1_s57sv"]
+
+[node name="SwordSwoosh" type="Node2D" unique_id=1742156940]
+script = ExtResource("1_s57sv")
+base_width = 6.0
+
+[node name="Line2D" type="Line2D" parent="." unique_id=1905426595]
+width = 3.0
+default_color = Color(0.9411765, 0.9647059, 0.9411765, 0.39215687)

@@ -8,6 +8,7 @@
 [ext_resource type="Script" uid="uid://en0dusjbmb2k" path="res://scenes/camera_2d.gd" id="4_jyhfs"]
 [ext_resource type="PackedScene" uid="uid://dgvwduvo2gd0h" path="res://scenes/settlement.tscn" id="6_85g3d"]
 [ext_resource type="Script" uid="uid://cgbrau7cs4cfv" path="res://scenes/CRTController.gd" id="6_o6xl0"]
+[ext_resource type="PackedScene" uid="uid://c0k764pmfij80" path="res://scenes/sword_swoosh.tscn" id="7_choun"]
 [ext_resource type="Shader" uid="uid://b1a41gw2ktdx3" path="res://scenes/main.gdshader" id="7_tipki"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_0wfyh"]
@@ -116,6 +117,7 @@ enemy_path = NodePath("../Enemy")
 camera_path = NodePath("Camera2D")
 step_dust_scene = ExtResource("3_tbgi4")
 settlement_scene = ExtResource("6_85g3d")
+sword_swoosh_scene = ExtResource("7_choun")
 
 [node name="Camera2D" type="Camera2D" parent="Player" unique_id=321565675]
 position_smoothing_enabled = true

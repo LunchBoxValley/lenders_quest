@@ -23,3 +23,6 @@ texture = ExtResource("1_3vyb7")
 offset = Vector2(1, -1)
 region_enabled = true
 region_rect = Rect2(96, 0, 16, 16)
+
+[node name="SwordTip" type="Marker2D" parent="Visual/HandSocket" unique_id=287299798]
+position = Vector2(5, -5)
