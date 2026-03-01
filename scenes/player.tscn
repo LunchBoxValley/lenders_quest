@@ -6,9 +6,20 @@
 [node name="Player" type="Node2D" unique_id=318157462]
 z_index = 10
 script = ExtResource("1_g2els")
-metadata/_edit_group_ = true
 
-[node name="Sprite2D" type="Sprite2D" parent="." unique_id=88953638]
+[node name="Visual" type="Node2D" parent="." unique_id=1575871161]
+
+[node name="Body" type="Sprite2D" parent="Visual" unique_id=88953638]
 texture = ExtResource("1_3vyb7")
 region_enabled = true
 region_rect = Rect2(64, 0, 16, 16)
+
+[node name="HandSocket" type="Marker2D" parent="Visual" unique_id=134013106]
+position = Vector2(3, 2)
+
+[node name="SwordSprite" type="Sprite2D" parent="Visual/HandSocket" unique_id=1529365881]
+position = Vector2(2, -2)
+texture = ExtResource("1_3vyb7")
+offset = Vector2(1, -1)
+region_enabled = true
+region_rect = Rect2(96, 0, 16, 16)
