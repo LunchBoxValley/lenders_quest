@@ -1,7 +1,6 @@
 [gd_scene format=3 uid="uid://dgvwduvo2gd0h"]
 
 [ext_resource type="Script" uid="uid://6jdj12pyq2a8" path="res://scenes/settlement.gd" id="1_87fap"]
-[ext_resource type="PackedScene" uid="uid://cnov2a6ggkd7i" path="res://scenes/main.tscn" id="2_m7gwf"]
 [ext_resource type="Shader" uid="uid://bydbdvo16euml" path="res://scenes/settlement.gdshader" id="3_7go5f"]
 [ext_resource type="Script" uid="uid://ba6bk76b07t5j" path="res://scenes/CrtControllerSettle.gd" id="3_m7gwf"]
 
@@ -40,7 +39,6 @@ shader_parameter/glitch_strength = 0.55
 [node name="Settlement" type="Node2D" unique_id=1317457662]
 script = ExtResource("1_87fap")
 label_path = NodePath("HUD/ResultLabel")
-next_scene = ExtResource("2_m7gwf")
 
 [node name="BG" type="ColorRect" parent="." unique_id=1867753586]
 offset_right = 350.0
@@ -52,6 +50,7 @@ color = Color(0.13333334, 0.13725491, 0.13725491, 1)
 [node name="ResultLabel" type="Label" parent="HUD" unique_id=1457088397]
 offset_right = 40.0
 offset_bottom = 23.0
+theme_override_font_sizes/font_size = 8
 
 [node name="PostFX" type="CanvasLayer" parent="." unique_id=1838625335]
 script = ExtResource("3_m7gwf")
