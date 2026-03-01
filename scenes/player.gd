@@ -31,7 +31,7 @@ signal turn_taken(player_grid_pos: Vector2i)
 @export var shake_on_hurt_strength: float = 1.5
 @export var shake_frames: int = 2
 
-# NEW: swing shake (even on miss) - boosted defaults
+# Swing shake (even on miss) - boosted defaults
 @export var shake_on_swing_strength: float = 4.0
 @export var shake_on_swing_frames: int = 8
 
@@ -70,9 +70,10 @@ signal turn_taken(player_grid_pos: Vector2i)
 @export var swing_degrees: float = 65.0
 
 # ----------------------------
-# Sword swoosh (trail)
+# Sword swoosh + hit spark
 # ----------------------------
 @export var sword_swoosh_scene: PackedScene
+@export var hit_spark_scene: PackedScene
 
 var map: TileMapLayer
 var enemy: Node
@@ -178,6 +179,7 @@ func _try_manual_swing() -> void:
 	if cam != null and cam.has_method("shake"):
 		cam.shake(shake_on_swing_strength, shake_on_swing_frames)
 
+	# Swoosh even on miss
 	if sword_swoosh_scene != null and sword_tip != null:
 		var swoosh := sword_swoosh_scene.instantiate()
 		get_parent().add_child(swoosh)
@@ -196,12 +198,22 @@ func _try_manual_swing() -> void:
 			enemy.take_damage(dmg)
 			hit = true
 
+			_spawn_hit_spark(enemy.global_position)
+
 	if hit:
 		_do_shake(shake_on_hit_strength)
 		await _do_hitstop()
 
 	_busy = false
 	turn_taken.emit(grid_pos)
+
+
+func _spawn_hit_spark(at_global: Vector2) -> void:
+	if hit_spark_scene == null:
+		return
+	var sp := hit_spark_scene.instantiate() as Node2D
+	get_parent().add_child(sp)
+	sp.global_position = at_global
 
 
 func _do_swing_anim() -> void:
@@ -243,27 +255,35 @@ func try_move_or_attack(dir: Vector2i) -> void:
 
 	var next: Vector2i = grid_pos + dir
 
+	# Bump attack (quick jab)
 	if enemy != null and enemy.has_method("get_grid_pos") and enemy.has_method("take_damage"):
 		var enemy_grid: Vector2i = enemy.get_grid_pos()
 		if enemy_grid == next:
 			var dmg: int = randi_range(damage_min, damage_max) + _attack_bonus
 			enemy.take_damage(dmg)
+
+			_spawn_hit_spark(enemy.global_position)
+
 			_do_shake(shake_on_hit_strength)
 			await _do_hitstop()
+
 			_busy = false
 			turn_taken.emit(grid_pos)
 			return
 
+	# Door check crossing rooms
 	if edge_transition_requires_door and _crosses_room_boundary(grid_pos, next):
 		var ok: bool = _is_door(grid_pos) or _is_door(next)
 		if not ok:
 			_busy = false
 			return
 
+	# Collision
 	if _is_blocked(next):
 		_busy = false
 		return
 
+	# Move
 	grid_pos = next
 	var target_global: Vector2 = map.to_global(map.map_to_local(grid_pos))
 
@@ -282,6 +302,9 @@ func try_move_or_attack(dir: Vector2i) -> void:
 	_apply_exit_if_needed(grid_pos)
 
 
+# ----------------------------
+# Treasure hide/reveal
+# ----------------------------
 func _cache_and_hide_treasures() -> void:
 	_hidden_treasures.clear()
 	var cells: Array[Vector2i] = map.get_used_cells()
@@ -320,6 +343,9 @@ func _apply_treasure_if_needed(tile: Vector2i) -> void:
 	map.set_cell(tile, tile_source_id, floor_atlas_coords, 0)
 
 
+# ----------------------------
+# Exit / Settlement
+# ----------------------------
 func _apply_exit_if_needed(tile: Vector2i) -> void:
 	var td: TileData = map.get_cell_tile_data(tile)
 	if td == null:
@@ -337,6 +363,9 @@ func _apply_exit_if_needed(tile: Vector2i) -> void:
 		get_tree().change_scene_to_packed(settlement_scene)
 
 
+# ----------------------------
+# Helpers / hazard / dust / death / draw
+# ----------------------------
 func _crosses_room_boundary(from_tile: Vector2i, to_tile: Vector2i) -> bool:
 	var room_w_tiles: int = maxi(1, int(floor(float(room_width_px) / float(tile_size))))
 	var room_h_tiles: int = maxi(1, int(floor(float(room_height_px) / float(tile_size))))

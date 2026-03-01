@@ -10,6 +10,7 @@
 [ext_resource type="Script" uid="uid://cgbrau7cs4cfv" path="res://scenes/CRTController.gd" id="6_o6xl0"]
 [ext_resource type="PackedScene" uid="uid://c0k764pmfij80" path="res://scenes/sword_swoosh.tscn" id="7_choun"]
 [ext_resource type="Shader" uid="uid://b1a41gw2ktdx3" path="res://scenes/main.gdshader" id="7_tipki"]
+[ext_resource type="PackedScene" uid="uid://btgqfb7574hu5" path="res://scenes/hit_spark.tscn" id="8_ya4ey"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_0wfyh"]
 texture = ExtResource("1_o5qli")
@@ -118,6 +119,7 @@ camera_path = NodePath("Camera2D")
 step_dust_scene = ExtResource("3_tbgi4")
 settlement_scene = ExtResource("6_85g3d")
 sword_swoosh_scene = ExtResource("7_choun")
+hit_spark_scene = ExtResource("8_ya4ey")
 
 [node name="Camera2D" type="Camera2D" parent="Player" unique_id=321565675]
 position_smoothing_enabled = true
