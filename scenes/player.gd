@@ -4,7 +4,6 @@ signal turn_taken(player_grid_pos: Vector2i)
 
 @export var tile_size: int = 16
 @export var map_path: NodePath
-@export var enemy_path: NodePath
 @export var camera_path: NodePath
 
 @export var max_hp: int = 10
@@ -31,61 +30,57 @@ signal turn_taken(player_grid_pos: Vector2i)
 @export var shake_on_hurt_strength: float = 1.5
 @export var shake_frames: int = 2
 
-# Swing shake (even on miss)
+# Swing shake (even on miss) - noticeable defaults
 @export var shake_on_swing_strength: float = 4.0
 @export var shake_on_swing_frames: int = 8
 
+# Zelda-style edge control (optional)
 @export var edge_transition_requires_door: bool = false
 @export var door_custom_key: StringName = &"door"
-
 @export var room_width_px: int = 320
 @export var room_height_px: int = 192
 
 @export var empty_cells_are_blocked: bool = false
 
+# Hazard tiles
 @export var hazard_custom_key: StringName = &"hazard"
 @export var hazard_damage_key: StringName = &"hazard_damage"
 @export var hazard_default_damage: int = 1
 @export var hazard_hitstop_frames: int = 1
 @export var hazard_shake_strength: float = 1.5
 
+# Treasure (hidden + reveal)
 @export var treasure_custom_key: StringName = &"treasure"
 @export var treasure_atlas_coords: Vector2i = Vector2i(1, 0)
 @export var floor_atlas_coords: Vector2i = Vector2i(2, 0)
 @export var tile_source_id: int = 0
 @export var treasure_reveal_radius: int = 3
 
+# Exit -> Settlement
 @export var exit_custom_key: StringName = &"exit"
 @export var settlement_scene: PackedScene
 @export var death_delay_sec: float = 0.30
 
+# Potion
 @export var potion_heal_amount: int = 3
 
-# ----------------------------
-# Manual swing settings
-# ----------------------------
+# Manual sword swing
 @export var manual_swing_bonus_damage: int = 1
 @export var swing_time: float = 0.08
 @export var swing_return_time: float = 0.06
 @export var swing_degrees: float = 65.0
 
-# ----------------------------
 # Swoosh + spark
-# ----------------------------
 @export var sword_swoosh_scene: PackedScene
 @export var hit_spark_scene: PackedScene
 
-# ----------------------------
-# NEW: Extraction Mode UI + Exit blink
-# ----------------------------
+# Extraction Mode UI + Exit blink
 @export var toast_label_path: NodePath
 @export var toast_duration_sec: float = 1.2
-
 @export var exit_blink_enabled: bool = true
 @export var exit_blink_period_sec: float = 0.25
 
 var map: TileMapLayer
-var enemy: Node
 var cam: Node
 
 var grid_pos: Vector2i
@@ -123,7 +118,6 @@ var _facing: Vector2i = Vector2i(1, 0) # default face right
 
 func _ready() -> void:
 	map = get_node(map_path) as TileMapLayer
-	enemy = get_node_or_null(enemy_path)
 	cam = get_node_or_null(camera_path)
 
 	_toast_label = get_node_or_null(toast_label_path) as Label
@@ -152,6 +146,7 @@ func _apply_loadout_from_shop() -> void:
 	if sword_sprite != null:
 		sword_sprite.visible = false
 
+	# 0 none, 1 sword, 2 boots, 3 potion
 	if GameManager.shop_item_id == 1:
 		_attack_bonus = 1
 		_has_sword = true
@@ -167,14 +162,16 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _busy or _dead:
 		return
 
+	# Manual sword swing (Space/Enter default is ui_accept)
 	if event.is_action_pressed("ui_accept"):
 		await _try_manual_swing()
 		return
 
+	# Potion use: press H  (PATCH: no await, this isn't a coroutine)
 	if event is InputEventKey and event.pressed and not event.echo:
 		var kc: Key = (event as InputEventKey).keycode
 		if kc == KEY_H:
-			await _try_use_potion()
+			_try_use_potion()
 			return
 
 	var dir: Vector2i = Vector2i.ZERO
@@ -191,17 +188,41 @@ func _unhandled_input(event: InputEvent) -> void:
 		await try_move_or_attack(dir)
 
 
+# ----------------------------
+# Multi-enemy helpers
+# ----------------------------
+func _get_enemy_at_tile(tile: Vector2i) -> Node:
+	var tree := get_tree()
+	if tree == null:
+		return null
+
+	var enemies := tree.get_nodes_in_group("enemies")
+	for e in enemies:
+		if e == null:
+			continue
+		if not is_instance_valid(e):
+			continue
+		if not e.has_method("get_grid_pos"):
+			continue
+		if e.get_grid_pos() == tile:
+			return e
+	return null
+
+
+# ----------------------------
+# Combat
+# ----------------------------
 func _try_manual_swing() -> void:
 	if not _has_sword:
 		return
 
 	_busy = true
 
-	# visible shake even on miss
+	# Visible shake even on miss
 	if cam != null and cam.has_method("shake"):
 		cam.shake(shake_on_swing_strength, shake_on_swing_frames)
 
-	# swoosh even on miss
+	# Swoosh even on miss
 	if sword_swoosh_scene != null and sword_tip != null:
 		var swoosh := sword_swoosh_scene.instantiate()
 		get_parent().add_child(swoosh)
@@ -211,18 +232,33 @@ func _try_manual_swing() -> void:
 	await _do_swing_anim()
 
 	var target_tile: Vector2i = grid_pos + _facing
+	var e := _get_enemy_at_tile(target_tile)
 
-	if enemy != null and enemy.has_method("get_grid_pos") and enemy.has_method("take_damage"):
-		var enemy_grid: Vector2i = enemy.get_grid_pos()
-		if enemy_grid == target_tile:
-			var dmg: int = randi_range(damage_min, damage_max) + _attack_bonus + manual_swing_bonus_damage
-			enemy.take_damage(dmg)
-			_spawn_hit_spark(enemy.global_position)
-			_do_shake(shake_on_hit_strength)
-			await _do_hitstop()
+	if e != null and e.has_method("take_damage"):
+		var dmg: int = randi_range(damage_min, damage_max) + _attack_bonus + manual_swing_bonus_damage
+		e.take_damage(dmg)
+
+		if e is Node2D:
+			_spawn_hit_spark((e as Node2D).global_position)
+
+		_do_shake(shake_on_hit_strength)
+		await _do_hitstop()
 
 	_busy = false
 	turn_taken.emit(grid_pos)
+
+
+func _do_swing_anim() -> void:
+	if hand_socket == null:
+		return
+
+	hand_socket.rotation_degrees = 0.0
+
+	# Visual is mirrored when facing left, so rotate the same way always
+	var tw := create_tween()
+	tw.tween_property(hand_socket, "rotation_degrees", swing_degrees, swing_time).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(hand_socket, "rotation_degrees", 0.0, swing_return_time).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	await tw.finished
 
 
 func _spawn_hit_spark(at_global: Vector2) -> void:
@@ -233,17 +269,9 @@ func _spawn_hit_spark(at_global: Vector2) -> void:
 	sp.global_position = at_global
 
 
-func _do_swing_anim() -> void:
-	if hand_socket == null:
-		return
-
-	hand_socket.rotation_degrees = 0.0
-	var tw: Tween = create_tween()
-	tw.tween_property(hand_socket, "rotation_degrees", swing_degrees, swing_time).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tw.tween_property(hand_socket, "rotation_degrees", 0.0, swing_return_time).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
-	await tw.finished
-
-
+# ----------------------------
+# Potion
+# ----------------------------
 func _try_use_potion() -> void:
 	if _potion_charges <= 0:
 		return
@@ -255,9 +283,14 @@ func _try_use_potion() -> void:
 	_potion_charges -= 1
 	queue_redraw()
 	_busy = false
+
+	# Potion costs a turn
 	turn_taken.emit(grid_pos)
 
 
+# ----------------------------
+# Movement + bump attack
+# ----------------------------
 func try_move_or_attack(dir: Vector2i) -> void:
 	if map == null or _dead:
 		return
@@ -265,6 +298,7 @@ func try_move_or_attack(dir: Vector2i) -> void:
 	_busy = true
 	_facing = dir
 
+	# Flip visuals so sword follows
 	if dir.x < 0:
 		visual.scale.x = -1.0
 	elif dir.x > 0:
@@ -272,30 +306,35 @@ func try_move_or_attack(dir: Vector2i) -> void:
 
 	var next: Vector2i = grid_pos + dir
 
-	# bump attack (quick jab)
-	if enemy != null and enemy.has_method("get_grid_pos") and enemy.has_method("take_damage"):
-		var enemy_grid: Vector2i = enemy.get_grid_pos()
-		if enemy_grid == next:
-			var dmg: int = randi_range(damage_min, damage_max) + _attack_bonus
-			enemy.take_damage(dmg)
-			_spawn_hit_spark(enemy.global_position)
-			_do_shake(shake_on_hit_strength)
-			await _do_hitstop()
-			_busy = false
-			turn_taken.emit(grid_pos)
-			return
+	# Bump attack: hit whatever enemy is in the next tile
+	var e := _get_enemy_at_tile(next)
+	if e != null and e.has_method("take_damage"):
+		var dmg: int = randi_range(damage_min, damage_max) + _attack_bonus
+		e.take_damage(dmg)
 
+		if e is Node2D:
+			_spawn_hit_spark((e as Node2D).global_position)
+
+		_do_shake(shake_on_hit_strength)
+		await _do_hitstop()
+
+		_busy = false
+		turn_taken.emit(grid_pos)
+		return
+
+	# Door check crossing rooms
 	if edge_transition_requires_door and _crosses_room_boundary(grid_pos, next):
 		var ok: bool = _is_door(grid_pos) or _is_door(next)
 		if not ok:
 			_busy = false
 			return
 
+	# Collision
 	if _is_blocked(next):
 		_busy = false
 		return
 
-	# move
+	# Move
 	grid_pos = next
 	var target_global: Vector2 = map.to_global(map.map_to_local(grid_pos))
 
@@ -304,6 +343,7 @@ func try_move_or_attack(dir: Vector2i) -> void:
 	await tw.finished
 
 	_spawn_step_dust(dir)
+
 	_reveal_treasures_near(grid_pos, treasure_reveal_radius)
 
 	await _apply_hazard_if_needed(grid_pos)
@@ -311,6 +351,7 @@ func try_move_or_attack(dir: Vector2i) -> void:
 
 	_busy = false
 	turn_taken.emit(grid_pos)
+
 	_apply_exit_if_needed(grid_pos)
 
 
@@ -327,7 +368,6 @@ func _enter_extraction_mode() -> void:
 
 
 func _exit_blink_loop() -> void:
-	# fire-and-forget coroutine
 	while is_inside_tree() and not _dead and GameManager.has_treasure:
 		_exit_blink_show_exit = not _exit_blink_show_exit
 
@@ -341,7 +381,6 @@ func _exit_blink_loop() -> void:
 			break
 		await tree.create_timer(exit_blink_period_sec).timeout
 
-	# ensure exit ends visible
 	if is_inside_tree():
 		_restore_exit_tiles()
 
@@ -383,14 +422,12 @@ func _show_toast(text: String, sec: float) -> void:
 	var my_token := _toast_token
 
 	_toast_label.text = text
-	_toast_label.visible = true
 
 	var tree := get_tree()
 	if tree == null:
 		return
 	await tree.create_timer(sec).timeout
 
-	# only clear if no newer toast replaced it
 	if my_token == _toast_token:
 		_clear_toast()
 
@@ -435,15 +472,13 @@ func _apply_treasure_if_needed(tile: Vector2i) -> void:
 	if td == null:
 		return
 
-	var is_treasure: bool = bool(td.get_custom_data(treasure_custom_key))
-	if not is_treasure:
+	if not bool(td.get_custom_data(treasure_custom_key)):
 		return
 
 	var value: int = GameManager.roll_treasure_value()
 	GameManager.found_treasure(value)
 	map.set_cell(tile, tile_source_id, floor_atlas_coords, 0)
 
-	# NEW: extraction mode kicks in here
 	_enter_extraction_mode()
 
 
@@ -454,8 +489,7 @@ func _apply_exit_if_needed(tile: Vector2i) -> void:
 	var td: TileData = map.get_cell_tile_data(tile)
 	if td == null:
 		return
-	var is_exit: bool = bool(td.get_custom_data(exit_custom_key))
-	if not is_exit:
+	if not bool(td.get_custom_data(exit_custom_key)):
 		return
 
 	if not GameManager.has_treasure:
@@ -500,8 +534,7 @@ func _apply_hazard_if_needed(tile: Vector2i) -> void:
 	if td == null:
 		return
 
-	var is_hazard: bool = bool(td.get_custom_data(hazard_custom_key))
-	if not is_hazard:
+	if not bool(td.get_custom_data(hazard_custom_key)):
 		return
 
 	var dmg: int = hazard_default_damage

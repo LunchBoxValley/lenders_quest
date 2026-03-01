@@ -28,7 +28,7 @@ extends Node2D
 @export var hp_seg_h: int = 2
 @export var hp_seg_gap: int = 1
 
-# NEW: pressure after treasure (1 extra turn => total 2 turns)
+# Pressure after treasure (1 extra turn => total 2 turns)
 @export var extra_turns_when_player_has_treasure: int = 1
 
 var map: TileMapLayer
@@ -45,6 +45,8 @@ var _telegraph_dir: Vector2i = Vector2i.ZERO
 
 
 func _ready() -> void:
+	add_to_group("enemies")
+
 	map = get_node(map_path) as TileMapLayer
 	player = get_node_or_null(player_path)
 	cam = get_node_or_null(camera_path)
@@ -56,7 +58,7 @@ func _ready() -> void:
 	grid_pos = map.local_to_map(local_pos + Vector2(tile_size * 0.5, tile_size * 0.5))
 	global_position = map.to_global(map.map_to_local(grid_pos))
 
-	# Connect to player turn signal
+	# Auto-connect to player turn signal
 	if player != null and player.has_signal("turn_taken"):
 		var c := Callable(self, "_on_player_turn_taken")
 		if not player.is_connected("turn_taken", c):
@@ -67,13 +69,11 @@ func _ready() -> void:
 
 
 func _on_player_turn_taken(player_grid_pos: Vector2i) -> void:
-	# Normal enemy turn
 	await take_turn(player_grid_pos)
 
-	# EXTRA pressure after treasure pickup
+	# Extra pressure after treasure pickup
 	if GameManager.has_treasure and extra_turns_when_player_has_treasure > 0:
 		for _i in range(extra_turns_when_player_has_treasure):
-			# Player hasn't moved again yet, so we use the same last known position.
 			await take_turn(player_grid_pos)
 
 
@@ -81,7 +81,7 @@ func take_turn(player_grid_pos: Vector2i) -> void:
 	if player == null:
 		return
 
-	# If we were telegraphing, either attack (if still adjacent) or cancel.
+	# Telegraph follow-up
 	if _telegraphing:
 		if _manhattan(grid_pos, player_grid_pos) == 1:
 			if player.has_method("take_damage"):
@@ -90,17 +90,16 @@ func take_turn(player_grid_pos: Vector2i) -> void:
 		_end_telegraph()
 		return
 
-	# If adjacent, begin telegraph instead of instant hit.
+	# Begin telegraph when adjacent
 	if _manhattan(grid_pos, player_grid_pos) == 1:
 		_begin_telegraph(player_grid_pos)
 		return
 
-	# Otherwise chase
+	# Chase
 	var step := _choose_step_toward(player_grid_pos)
 	if step == Vector2i.ZERO:
 		return
 
-	# Face direction
 	if step.x < 0:
 		body.flip_h = true
 	elif step.x > 0:
@@ -108,7 +107,6 @@ func take_turn(player_grid_pos: Vector2i) -> void:
 
 	var next := grid_pos + step
 	if _is_blocked(next):
-		# Fallback axis if blocked
 		var alt := _choose_step_toward(player_grid_pos, true)
 		if alt != Vector2i.ZERO and not _is_blocked(grid_pos + alt):
 			step = alt
@@ -138,7 +136,6 @@ func _choose_step_toward(target: Vector2i, force_other_axis: bool = false) -> Ve
 		else:
 			return Vector2i(sign(dx), 0) if randi() % 2 == 0 else Vector2i(0, sign(dy))
 	else:
-		# Forced alternate axis
 		if abs(dx) >= abs(dy):
 			return Vector2i(0, sign(dy))
 		else:
@@ -210,7 +207,6 @@ func get_grid_pos() -> Vector2i:
 
 
 func _draw() -> void:
-	# HP bar (white + light grey only)
 	var total_segments: int = int(ceil(float(max_hp) / float(hp_per_segment)))
 	var filled_segments: int = int(ceil(float(hp) / float(hp_per_segment)))
 
