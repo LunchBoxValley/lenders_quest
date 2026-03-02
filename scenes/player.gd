@@ -59,7 +59,7 @@ signal turn_taken(player_grid_pos: Vector2i)
 # Random treasure + clue
 @export var randomize_treasure_each_run: bool = true
 @export var run_start_clue_enabled: bool = true
-@export var run_start_clue_duration_sec: float = 2.8 # longer
+@export var run_start_clue_duration_sec: float = 2.8
 
 # Random exit each run (visible)
 @export var randomize_exit_each_run: bool = true
@@ -69,7 +69,7 @@ signal turn_taken(player_grid_pos: Vector2i)
 @export var settlement_scene: PackedScene
 @export var death_delay_sec: float = 0.30
 
-# NEW: Exit spin juice
+# Exit spin juice
 @export var exit_spin_enabled: bool = true
 @export var exit_spin_flips: int = 10
 @export var exit_spin_interval_sec: float = 0.05
@@ -106,7 +106,7 @@ var _exiting: bool = false
 
 var _hidden_treasures: Array[Vector2i] = []
 
-# Exit tiles cache for blinking
+# Exit tiles cache for blinking (also used for LOGIC now)
 var _exit_tiles: Array[Dictionary] = []
 var _exit_blink_running: bool = false
 var _exit_blink_show_exit: bool = true
@@ -197,7 +197,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		await _try_manual_swing()
 		return
 
-	# Potion use: press H (no await; not a coroutine)
+	# Potion use: press H
 	if event is InputEventKey and event.pressed and not event.echo:
 		var kc: Key = (event as InputEventKey).keycode
 		if kc == KEY_H:
@@ -362,13 +362,12 @@ func try_move_or_attack(dir: Vector2i) -> void:
 	await _apply_hazard_if_needed(grid_pos)
 	_apply_treasure_if_needed(grid_pos)
 
-	# If we died from hazard, stop
 	if _dead:
 		_busy = false
 		return
 
-	# Exit check (with spin juice)
-	if _is_exit_tile(grid_pos):
+	# IMPORTANT FIX: exit logic uses cached exit location, not tile visuals.
+	if _is_exit_location(grid_pos):
 		_busy = false
 		await _exit_sequence()
 		return
@@ -377,11 +376,21 @@ func try_move_or_attack(dir: Vector2i) -> void:
 	turn_taken.emit(grid_pos)
 
 
-func _is_exit_tile(tile: Vector2i) -> bool:
+# ---- FIXED EXIT CHECK ----
+func _is_exit_location(tile: Vector2i) -> bool:
+	# Uses cached exit location(s) so blinking visuals can't "turn off" exit detection.
+	for e in _exit_tiles:
+		var p: Vector2i = e["pos"]
+		if p == tile:
+			# If exit is currently hidden by blink, force it visible before exiting.
+			if GameManager.has_treasure and exit_blink_enabled and not _exit_blink_show_exit:
+				_exit_blink_show_exit = true
+				_restore_exit_tiles()
+			return true
+
+	# Fallback (should rarely be needed)
 	var td: TileData = map.get_cell_tile_data(tile)
-	if td == null:
-		return false
-	return bool(td.get_custom_data(exit_custom_key))
+	return td != null and bool(td.get_custom_data(exit_custom_key))
 
 
 func _exit_sequence() -> void:
@@ -390,43 +399,97 @@ func _exit_sequence() -> void:
 	_exiting = true
 	_busy = true
 
-	# Set death_reason just like before
+	# Stop blinking immediately so it can't fight the exit animation.
+	_exit_blink_running = false
+	_exit_blink_show_exit = true
+	_restore_exit_tiles()
+
 	GameManager.death_reason = "flee" if not GameManager.has_treasure else "none"
 
 	if exit_spin_enabled:
 		await _do_exit_spin()
 
-	# Leave
 	if settlement_scene != null and get_tree() != null:
 		get_tree().change_scene_to_packed(settlement_scene)
 
 
 func _do_exit_spin() -> void:
-	# Flip left/right rapidly (NES spin)
 	var tree := get_tree()
 	if tree == null:
 		return
 
-	var base_scale_x: float = 1.0
-	# keep whatever your current facing is as the "base"
-	if visual.scale.x < 0.0:
-		base_scale_x = -1.0
-
+	var base_scale_x: float = -1.0 if visual.scale.x < 0.0 else 1.0
 	var base_pos: Vector2 = visual.position
 
 	for i in range(maxi(1, exit_spin_flips)):
 		var s: float = base_scale_x if (i % 2 == 0) else -base_scale_x
 		visual.scale.x = s
 
-		# tiny bob for extra juice
 		if exit_spin_bob_px > 0.0:
 			visual.position = base_pos + Vector2(0.0, (-exit_spin_bob_px if (i % 2 == 0) else exit_spin_bob_px))
 
 		await tree.create_timer(exit_spin_interval_sec).timeout
 
-	# restore
 	visual.scale.x = base_scale_x
 	visual.position = base_pos
+
+
+# ----------------------------
+# Exit blink (unchanged visuals, but loop stops when exiting)
+# ----------------------------
+func _enter_extraction_mode() -> void:
+	_show_toast("TREASURE FOUND!\nESCAPE!", toast_duration_sec)
+
+	if exit_blink_enabled and not _exit_blink_running and _exit_tiles.size() > 0:
+		_exit_blink_running = true
+		_exit_blink_show_exit = true
+		_exit_blink_loop()
+
+
+func _exit_blink_loop() -> void:
+	while is_inside_tree() and not _dead and not _exiting and GameManager.has_treasure and _exit_blink_running:
+		_exit_blink_show_exit = not _exit_blink_show_exit
+
+		if _exit_blink_show_exit:
+			_restore_exit_tiles()
+		else:
+			_hide_exit_tiles_as_floor()
+
+		var tree := get_tree()
+		if tree == null:
+			break
+		await tree.create_timer(exit_blink_period_sec).timeout
+
+	# ensure exit ends visible
+	if is_inside_tree():
+		_exit_blink_show_exit = true
+		_restore_exit_tiles()
+
+	_exit_blink_running = false
+
+
+func _cache_exit_tiles() -> void:
+	_exit_tiles.clear()
+	for cell in map.get_used_cells():
+		var td: TileData = map.get_cell_tile_data(cell)
+		if td != null and bool(td.get_custom_data(exit_custom_key)):
+			_exit_tiles.append({
+				"pos": cell,
+				"sid": map.get_cell_source_id(cell),
+				"ac": map.get_cell_atlas_coords(cell),
+				"alt": map.get_cell_alternative_tile(cell),
+			})
+
+
+func _restore_exit_tiles() -> void:
+	for e in _exit_tiles:
+		map.set_cell(e["pos"], int(e["sid"]), e["ac"], int(e["alt"]))
+
+
+func _hide_exit_tiles_as_floor() -> void:
+	# Hide only for visuals (logic uses cached positions)
+	for e in _exit_tiles:
+		map.set_cell(e["pos"], tile_source_id, floor_atlas_coords, 0)
 
 
 # ----------------------------
@@ -435,9 +498,7 @@ func _do_exit_spin() -> void:
 func _get_exit_template() -> Dictionary:
 	for cell in map.get_used_cells():
 		var td: TileData = map.get_cell_tile_data(cell)
-		if td == null:
-			continue
-		if bool(td.get_custom_data(exit_custom_key)):
+		if td != null and bool(td.get_custom_data(exit_custom_key)):
 			return {
 				"sid": map.get_cell_source_id(cell),
 				"ac": map.get_cell_atlas_coords(cell),
@@ -534,7 +595,7 @@ func _show_run_start_clue(tpos: Vector2i) -> void:
 	var mid_y: float = float(bounds.position.y) + float(bounds.size.y) * 0.5
 
 	var r: int = randi() % 3
-	var text: String = ""
+	var text: String
 
 	if r == 0:
 		text = "Clue: It's in the NORTH half." if float(tpos.y) < mid_y else "Clue: It's in the SOUTH half."
@@ -581,81 +642,7 @@ func _compute_walkable_floor_bounds() -> Rect2i:
 
 
 # ----------------------------
-# Extraction Mode (unchanged)
-# ----------------------------
-func _enter_extraction_mode() -> void:
-	_show_toast("TREASURE FOUND!\nESCAPE!", toast_duration_sec)
-
-	if exit_blink_enabled and not _exit_blink_running and _exit_tiles.size() > 0:
-		_exit_blink_running = true
-		_exit_blink_show_exit = true
-		_exit_blink_loop()
-
-
-func _exit_blink_loop() -> void:
-	while is_inside_tree() and not _dead and GameManager.has_treasure:
-		_exit_blink_show_exit = not _exit_blink_show_exit
-		if _exit_blink_show_exit:
-			_restore_exit_tiles()
-		else:
-			_hide_exit_tiles_as_floor()
-
-		var tree := get_tree()
-		if tree == null:
-			break
-		await tree.create_timer(exit_blink_period_sec).timeout
-
-	if is_inside_tree():
-		_restore_exit_tiles()
-	_exit_blink_running = false
-
-
-func _cache_exit_tiles() -> void:
-	_exit_tiles.clear()
-	for cell in map.get_used_cells():
-		var td: TileData = map.get_cell_tile_data(cell)
-		if td != null and bool(td.get_custom_data(exit_custom_key)):
-			_exit_tiles.append({
-				"pos": cell,
-				"sid": map.get_cell_source_id(cell),
-				"ac": map.get_cell_atlas_coords(cell),
-				"alt": map.get_cell_alternative_tile(cell),
-			})
-
-
-func _restore_exit_tiles() -> void:
-	for e in _exit_tiles:
-		map.set_cell(e["pos"], int(e["sid"]), e["ac"], int(e["alt"]))
-
-
-func _hide_exit_tiles_as_floor() -> void:
-	for e in _exit_tiles:
-		map.set_cell(e["pos"], tile_source_id, floor_atlas_coords, 0)
-
-
-func _show_toast(text: String, sec: float) -> void:
-	if _toast_label == null:
-		return
-	_toast_token += 1
-	var my_token := _toast_token
-	_toast_label.text = text
-
-	var tree := get_tree()
-	if tree == null:
-		return
-	await tree.create_timer(sec).timeout
-
-	if my_token == _toast_token:
-		_clear_toast()
-
-
-func _clear_toast() -> void:
-	if _toast_label != null:
-		_toast_label.text = ""
-
-
-# ----------------------------
-# Treasure hide/reveal (unchanged)
+# Treasure hide/reveal
 # ----------------------------
 func _cache_and_hide_treasures() -> void:
 	_hidden_treasures.clear()
@@ -697,8 +684,29 @@ func _apply_treasure_if_needed(tile: Vector2i) -> void:
 
 
 # ----------------------------
-# Helpers / hazard / dust / death / draw
+# Misc helpers
 # ----------------------------
+func _show_toast(text: String, sec: float) -> void:
+	if _toast_label == null:
+		return
+	_toast_token += 1
+	var my_token := _toast_token
+	_toast_label.text = text
+
+	var tree := get_tree()
+	if tree == null:
+		return
+	await tree.create_timer(sec).timeout
+
+	if my_token == _toast_token:
+		_clear_toast()
+
+
+func _clear_toast() -> void:
+	if _toast_label != null:
+		_toast_label.text = ""
+
+
 func _crosses_room_boundary(from_tile: Vector2i, to_tile: Vector2i) -> bool:
 	var room_w_tiles: int = maxi(1, int(floor(float(room_width_px) / float(tile_size))))
 	var room_h_tiles: int = maxi(1, int(floor(float(room_height_px) / float(tile_size))))
