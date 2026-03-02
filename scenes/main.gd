@@ -27,7 +27,6 @@ func _ready() -> void:
 
 	if _player != null:
 		GameManager.bind_player(_player)
-
 		if _player.has_signal("turn_taken"):
 			var c := Callable(self, "_on_player_turn_taken")
 			if not _player.is_connected("turn_taken", c):
@@ -56,17 +55,15 @@ func _spawn_collector_once() -> void:
 	if spawn_node != null:
 		spawn_pos = spawn_node.global_position
 	else:
-		var template_enemy := get_node_or_null(enemy_template_path) as Node2D
-		if template_enemy != null:
-			spawn_pos = template_enemy.global_position
-		elif _player != null and _player is Node2D:
+		# fallback: spawn near player if marker missing
+		if _player != null and _player is Node2D:
 			spawn_pos = (_player as Node2D).global_position
 
 	var collector := ENEMY_SCENE.instantiate() as Node2D
 	collector.name = "Collector"
 	collector.global_position = spawn_pos
 
-	# Copy important exported settings from existing Enemy instance (safe property copy)
+	# Try to copy settings from template enemy if it still exists (optional)
 	var template := get_node_or_null(enemy_template_path)
 	if template != null:
 		_copy_prop_if_exists(collector, template, &"map_path")
