@@ -64,6 +64,12 @@ signal turn_taken(player_grid_pos: Vector2i)
 # Random exit each run (visible)
 @export var randomize_exit_each_run: bool = true
 
+# Fair randomness (new)
+@export var placement_attempts: int = 200
+@export var min_treasure_dist_from_player: int = 10
+@export var min_exit_dist_from_player: int = 8
+@export var min_exit_dist_from_treasure: int = 8
+
 # Exit -> Settlement
 @export var exit_custom_key: StringName = &"exit"
 @export var settlement_scene: PackedScene
@@ -106,10 +112,14 @@ var _exiting: bool = false
 
 var _hidden_treasures: Array[Vector2i] = []
 
-# Exit tiles cache for blinking (also used for LOGIC now)
+# Exit tiles cache for blinking (also used for exit logic)
 var _exit_tiles: Array[Dictionary] = []
 var _exit_blink_running: bool = false
 var _exit_blink_show_exit: bool = true
+
+# Run placement memory (fair randomness)
+var _run_exit_pos: Vector2i = Vector2i(999999, 999999)
+var _run_treasure_pos: Vector2i = Vector2i(999999, 999999)
 
 # Toast
 var _toast_label: Label
@@ -152,16 +162,15 @@ func _ready() -> void:
 	if randomize_exit_each_run:
 		var tmpl := _get_exit_template()
 		if not tmpl.is_empty():
-			_place_random_exit_tile(tmpl)
+			_run_exit_pos = _place_random_exit_tile(tmpl)
 
 	_cache_exit_tiles()
 
 	# Randomize treasure each run + clue
-	var placed_treasure: Vector2i = Vector2i(999999, 999999)
 	if randomize_treasure_each_run:
-		placed_treasure = _place_random_treasure_tile()
-		if run_start_clue_enabled and placed_treasure.x < 900000:
-			_show_run_start_clue(placed_treasure)
+		_run_treasure_pos = _place_random_treasure_tile()
+		if run_start_clue_enabled and _run_treasure_pos.x < 900000:
+			_show_run_start_clue(_run_treasure_pos)
 
 	_cache_and_hide_treasures()
 	_reveal_treasures_near(grid_pos, treasure_reveal_radius)
@@ -169,6 +178,9 @@ func _ready() -> void:
 	queue_redraw()
 
 
+# ----------------------------
+# Loadout
+# ----------------------------
 func _apply_loadout_from_shop() -> void:
 	_attack_bonus = 0
 	_hazard_reduction = 0
@@ -178,6 +190,7 @@ func _apply_loadout_from_shop() -> void:
 	if sword_sprite != null:
 		sword_sprite.visible = false
 
+	# 0 none, 1 sword, 2 boots, 3 potion
 	if GameManager.shop_item_id == 1:
 		_attack_bonus = 1
 		_has_sword = true
@@ -197,7 +210,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		await _try_manual_swing()
 		return
 
-	# Potion use: press H
+	# Potion use: press H (no await; not a coroutine)
 	if event is InputEventKey and event.pressed and not event.echo:
 		var kc: Key = (event as InputEventKey).keycode
 		if kc == KEY_H:
@@ -236,6 +249,10 @@ func _get_enemy_at_tile(tile: Vector2i) -> Node:
 	return null
 
 
+func _manhattan(a: Vector2i, b: Vector2i) -> int:
+	return abs(a.x - b.x) + abs(a.y - b.y)
+
+
 # ----------------------------
 # Combat
 # ----------------------------
@@ -245,9 +262,11 @@ func _try_manual_swing() -> void:
 
 	_busy = true
 
+	# Visible shake even on miss
 	if cam != null and cam.has_method("shake"):
 		cam.shake(shake_on_swing_strength, shake_on_swing_frames)
 
+	# Swoosh even on miss
 	if sword_swoosh_scene != null and sword_tip != null:
 		var swoosh := sword_swoosh_scene.instantiate()
 		get_parent().add_child(swoosh)
@@ -278,6 +297,8 @@ func _do_swing_anim() -> void:
 		return
 
 	hand_socket.rotation_degrees = 0.0
+
+	# Visual is mirrored when facing left, so rotate the same way always
 	var tw := create_tween()
 	tw.tween_property(hand_socket, "rotation_degrees", swing_degrees, swing_time).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	tw.tween_property(hand_socket, "rotation_degrees", 0.0, swing_return_time).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
@@ -292,6 +313,9 @@ func _spawn_hit_spark(at_global: Vector2) -> void:
 	sp.global_position = at_global
 
 
+# ----------------------------
+# Potion
+# ----------------------------
 func _try_use_potion() -> void:
 	if _potion_charges <= 0:
 		return
@@ -317,6 +341,7 @@ func try_move_or_attack(dir: Vector2i) -> void:
 	_busy = true
 	_facing = dir
 
+	# Flip visuals so sword follows
 	if dir.x < 0:
 		visual.scale.x = -1.0
 	elif dir.x > 0:
@@ -324,6 +349,7 @@ func try_move_or_attack(dir: Vector2i) -> void:
 
 	var next: Vector2i = grid_pos + dir
 
+	# Bump attack: hit whatever enemy is in the next tile
 	var e := _get_enemy_at_tile(next)
 	if e != null and e.has_method("take_damage"):
 		var dmg: int = randi_range(damage_min, damage_max) + _attack_bonus
@@ -339,16 +365,19 @@ func try_move_or_attack(dir: Vector2i) -> void:
 		turn_taken.emit(grid_pos)
 		return
 
+	# Door check crossing rooms
 	if edge_transition_requires_door and _crosses_room_boundary(grid_pos, next):
 		var ok: bool = _is_door(grid_pos) or _is_door(next)
 		if not ok:
 			_busy = false
 			return
 
+	# Collision
 	if _is_blocked(next):
 		_busy = false
 		return
 
+	# Move
 	grid_pos = next
 	var target_global: Vector2 = map.to_global(map.map_to_local(grid_pos))
 
@@ -366,7 +395,7 @@ func try_move_or_attack(dir: Vector2i) -> void:
 		_busy = false
 		return
 
-	# IMPORTANT FIX: exit logic uses cached exit location, not tile visuals.
+	# Exit logic uses cached exit location (so blinking can't "turn it off")
 	if _is_exit_location(grid_pos):
 		_busy = false
 		await _exit_sequence()
@@ -376,19 +405,19 @@ func try_move_or_attack(dir: Vector2i) -> void:
 	turn_taken.emit(grid_pos)
 
 
-# ---- FIXED EXIT CHECK ----
+# ----------------------------
+# Exit logic + juice
+# ----------------------------
 func _is_exit_location(tile: Vector2i) -> bool:
-	# Uses cached exit location(s) so blinking visuals can't "turn off" exit detection.
 	for e in _exit_tiles:
-		var p: Vector2i = e["pos"]
-		if p == tile:
-			# If exit is currently hidden by blink, force it visible before exiting.
+		if e["pos"] == tile:
+			# If exit is hidden by blink right now, force visible before exiting
 			if GameManager.has_treasure and exit_blink_enabled and not _exit_blink_show_exit:
 				_exit_blink_show_exit = true
 				_restore_exit_tiles()
 			return true
 
-	# Fallback (should rarely be needed)
+	# Fallback
 	var td: TileData = map.get_cell_tile_data(tile)
 	return td != null and bool(td.get_custom_data(exit_custom_key))
 
@@ -399,7 +428,7 @@ func _exit_sequence() -> void:
 	_exiting = true
 	_busy = true
 
-	# Stop blinking immediately so it can't fight the exit animation.
+	# Stop blinking immediately so it can't fight the exit animation
 	_exit_blink_running = false
 	_exit_blink_show_exit = true
 	_restore_exit_tiles()
@@ -435,7 +464,7 @@ func _do_exit_spin() -> void:
 
 
 # ----------------------------
-# Exit blink (unchanged visuals, but loop stops when exiting)
+# Extraction Mode: toast + exit blink
 # ----------------------------
 func _enter_extraction_mode() -> void:
 	_show_toast("TREASURE FOUND!\nESCAPE!", toast_duration_sec)
@@ -460,7 +489,7 @@ func _exit_blink_loop() -> void:
 			break
 		await tree.create_timer(exit_blink_period_sec).timeout
 
-	# ensure exit ends visible
+	# Ensure exit ends visible
 	if is_inside_tree():
 		_exit_blink_show_exit = true
 		_restore_exit_tiles()
@@ -487,13 +516,12 @@ func _restore_exit_tiles() -> void:
 
 
 func _hide_exit_tiles_as_floor() -> void:
-	# Hide only for visuals (logic uses cached positions)
 	for e in _exit_tiles:
 		map.set_cell(e["pos"], tile_source_id, floor_atlas_coords, 0)
 
 
 # ----------------------------
-# Random Exit (visible) each run
+# Random Exit (visible) each run (FAIR)
 # ----------------------------
 func _get_exit_template() -> Dictionary:
 	for cell in map.get_used_cells():
@@ -508,11 +536,13 @@ func _get_exit_template() -> Dictionary:
 
 
 func _place_random_exit_tile(tmpl: Dictionary) -> Vector2i:
+	# Remove any existing exit tiles
 	for cell in map.get_used_cells():
 		var td: TileData = map.get_cell_tile_data(cell)
 		if td != null and bool(td.get_custom_data(exit_custom_key)):
 			map.set_cell(cell, tile_source_id, floor_atlas_coords, 0)
 
+	# Build candidates (walkable floor)
 	var candidates: Array[Vector2i] = []
 	for cell in map.get_used_cells():
 		if cell == grid_pos:
@@ -537,21 +567,30 @@ func _place_random_exit_tile(tmpl: Dictionary) -> Vector2i:
 	if candidates.is_empty():
 		return Vector2i(999999, 999999)
 
+	# Try to find a "fair" exit far from player
 	var pick: Vector2i = candidates[randi() % candidates.size()]
+	for _i in range(placement_attempts):
+		var c: Vector2i = candidates[randi() % candidates.size()]
+		if _manhattan(c, grid_pos) >= min_exit_dist_from_player:
+			pick = c
+			break
+
 	map.set_cell(pick, int(tmpl["sid"]), tmpl["ac"], int(tmpl["alt"]))
 	return pick
 
 
 # ----------------------------
-# Random Treasure + clue
+# Random Treasure + clue (FAIR)
 # ----------------------------
 func _place_random_treasure_tile() -> Vector2i:
+	# Remove any old treasure tiles
 	for cell in map.get_used_cells():
 		if map.get_cell_source_id(cell) != tile_source_id:
 			continue
 		if map.get_cell_atlas_coords(cell) == treasure_atlas_coords:
 			map.set_cell(cell, tile_source_id, floor_atlas_coords, 0)
 
+	# Build candidates (walkable floor)
 	var candidates: Array[Vector2i] = []
 	for cell in map.get_used_cells():
 		if cell == grid_pos:
@@ -579,6 +618,19 @@ func _place_random_treasure_tile() -> Vector2i:
 		return Vector2i(999999, 999999)
 
 	var pick: Vector2i = candidates[randi() % candidates.size()]
+	var have_exit: bool = (_run_exit_pos.x < 900000)
+
+	for _i in range(placement_attempts):
+		var c: Vector2i = candidates[randi() % candidates.size()]
+
+		if _manhattan(c, grid_pos) < min_treasure_dist_from_player:
+			continue
+		if have_exit and _manhattan(c, _run_exit_pos) < min_exit_dist_from_treasure:
+			continue
+
+		pick = c
+		break
+
 	map.set_cell(pick, tile_source_id, treasure_atlas_coords, 0)
 	return pick
 
@@ -684,7 +736,7 @@ func _apply_treasure_if_needed(tile: Vector2i) -> void:
 
 
 # ----------------------------
-# Misc helpers
+# Toast helpers
 # ----------------------------
 func _show_toast(text: String, sec: float) -> void:
 	if _toast_label == null:
@@ -707,6 +759,9 @@ func _clear_toast() -> void:
 		_toast_label.text = ""
 
 
+# ----------------------------
+# Map helpers
+# ----------------------------
 func _crosses_room_boundary(from_tile: Vector2i, to_tile: Vector2i) -> bool:
 	var room_w_tiles: int = maxi(1, int(floor(float(room_width_px) / float(tile_size))))
 	var room_h_tiles: int = maxi(1, int(floor(float(room_height_px) / float(tile_size))))
@@ -834,6 +889,7 @@ func _play_hit_flash() -> void:
 func _draw() -> void:
 	var total_segments: int = int(ceil(float(max_hp) / float(hp_per_segment)))
 	var filled_segments: int = int(ceil(float(hp) / float(hp_per_segment)))
+
 	var gaps: int = maxi(0, total_segments - 1)
 	var total_w: float = float(total_segments * hp_seg_w + gaps * hp_seg_gap)
 
