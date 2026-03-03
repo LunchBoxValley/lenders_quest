@@ -5,9 +5,13 @@
 [ext_resource type="Script" uid="uid://bo0mj1sfat7ua" path="res://scenes/label_2.gd" id="3_b3w7a"]
 [ext_resource type="Script" uid="uid://5615wb1tsgqv" path="res://scenes/CRTController_Title.gd" id="3_pyl7j"]
 [ext_resource type="Shader" uid="uid://dffsrlv0h7r5j" path="res://scenes/title.gdshader" id="4_b3w7a"]
+[ext_resource type="Script" uid="uid://bvpsanq6mgyal" path="res://scenes/color_rect.gd" id="6_4rr2b"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_4rr2b"]
 shader = ExtResource("4_b3w7a")
+shader_parameter/warmup_enabled = true
+shader_parameter/warmup_start_time = 0.0
+shader_parameter/warmup_duration = 2.0
 shader_parameter/scanline_strength = 0.55
 shader_parameter/scanline_density = 450.0
 shader_parameter/scanline_thickness = 0.85
@@ -37,11 +41,6 @@ shader_parameter/soften_radius_px = 1.0
 shader_parameter/glitch_probability_per_second = 0.022
 shader_parameter/glitch_duration = 0.18
 shader_parameter/glitch_strength = 0.55
-shader_parameter/warmup_enabled = true
-shader_parameter/warmup_duration_sec = 2.0
-shader_parameter/warmup_glow_strength = 0.85
-shader_parameter/warmup_squeeze_strength = 0.75
-shader_parameter/warmup_blackout_strength = 0.65
 
 [node name="Title" type="Node2D" unique_id=1606529292]
 script = ExtResource("1_wosw1")
@@ -87,3 +86,4 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+script = ExtResource("6_4rr2b")

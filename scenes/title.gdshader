@@ -3,9 +3,31 @@ shader_type canvas_item;
 uniform sampler2D SCREEN_TEXTURE : hint_screen_texture, filter_nearest;
 
 // ----------------------------
+// Warm-up (scene-local)
+// ----------------------------
+uniform bool warmup_enabled = false;
+uniform float warmup_start_time = 0.0;                // set by Title script
+uniform float warmup_duration : hint_range(0.1, 6.0) = 2.0;
+
+// Soft “bloom to life” shape (not a sharp center line)
+uniform float warmup_aperture_softness : hint_range(0.01, 0.80) = 0.22; // edge softness of the expanding glow
+uniform float warmup_glow_strength     : hint_range(0.0, 2.0) = 1.00;   // how bright the warm glow is
+
+// Make the title fade in late (so it doesn't appear crisp immediately)
+uniform float warmup_fade_in_start : hint_range(0.0, 1.0) = 0.70; // start fading image in (as fraction of warmup)
+uniform float warmup_fade_in_end   : hint_range(0.0, 1.0) = 1.00; // fully visible by the end
+
+// Optional focus-hunt (blur) that settles
+uniform float warmup_defocus_strength  : hint_range(0.0, 1.0) = 0.85;
+uniform float warmup_defocus_radius_px : hint_range(0.0, 3.0) = 1.3;
+
+// Optional wobble (very subtle)
+uniform float warmup_wobble_uv : hint_range(0.0, 0.02) = 0.0035;
+
+// ----------------------------
 // Scanlines
 // ----------------------------
-uniform float scanline_strength : hint_range(0.0, 1.0) = 0.55;
+uniform float scanline_strength : hint_range(0.0, 1.0) = 0.65;
 uniform float scanline_density  : hint_range(100.0, 1200.0) = 450.0;
 uniform float scanline_thickness : hint_range(0.05, 2.0) = 0.85;
 uniform float scanline_offset    : hint_range(0.0, 1.0) = 0.2;
@@ -29,17 +51,14 @@ uniform vec2 phosphor_dir = vec2(-1.0, 0.8);
 // ----------------------------
 // Extra retro juice (no color change)
 // ----------------------------
-// Edge-only extra soften (blurrier corners/edges like real CRT glass)
 uniform float edge_soften_strength : hint_range(0.0, 1.0) = 0.18;
 uniform float edge_soften_radius_px : hint_range(0.0, 2.0) = 1.0;
-uniform float edge_soften_start : hint_range(0.0, 1.0) = 0.25; // where edge blur begins
-uniform float edge_soften_end   : hint_range(0.0, 2.0) = 1.10; // where edge blur maxes out
+uniform float edge_soften_start : hint_range(0.0, 1.0) = 0.25;
+uniform float edge_soften_end   : hint_range(0.0, 2.0) = 1.10;
 
-// Tiny brightness flicker (not strobe)
 uniform float flicker_strength : hint_range(0.0, 0.10) = 0.015;
 uniform float flicker_speed    : hint_range(0.0, 5.0) = 1.70;
 
-// Very faint interlace hint
 uniform float interlace_strength : hint_range(0.0, 0.10) = 0.02;
 
 // Lock scanline/grille/noise to pixel grid to avoid “crawling”
@@ -139,6 +158,24 @@ void fragment() {
 		uv_pat = (floor(uvc * tex_sz) + vec2(0.5)) * px;
 	}
 
+	// ----------------------------
+	// Warm-up timing (scene-local)
+	// ----------------------------
+	float local_t = max(0.0, TIME - warmup_start_time);
+	float wup = clamp(local_t / max(0.001, warmup_duration), 0.0, 1.0);
+	float open = pow(smoothstep(0.0, 1.0, wup), 1.12);
+	float phase = 1.0 - open; // 1 at start -> 0 at end
+	bool warm_active = warmup_enabled && (local_t < warmup_duration);
+
+	// Optional wobble that fades out
+	vec2 uv_gl = uvc;
+	if (warm_active && warmup_wobble_uv > 0.0) {
+		float wob = warmup_wobble_uv * phase;
+		uv_gl.x += sin(uv_gl.y * 120.0 + local_t * 18.0) * wob;
+		uv_gl.y += sin(uv_gl.x *  80.0 + local_t * 14.0) * (wob * 0.40);
+		uv_gl = clamp(uv_gl, vec2(0.0), vec2(1.0));
+	}
+
 	// Rare glitch trigger
 	float sec = floor(TIME);
 	float r = hash12(vec2(sec, sec * 1.37));
@@ -149,35 +186,40 @@ void fragment() {
 	float pulse_out = 1.0 - smoothstep(glitch_duration, glitch_duration + 0.04, t);
 	float glitch = glitch_on * pulse_in * pulse_out * glitch_strength;
 
-	vec2 uv_gl = uvc;
-
+	vec2 uv_fx = uv_gl;
 	if (glitch > 0.001) {
-		float band = floor(uv_gl.y * 24.0);
+		float band = floor(uv_fx.y * 24.0);
 		float band_r = hash12(vec2(band, sec));
 		float jitter = (band_r - 0.5) * 0.03 * glitch;
-		uv_gl.x += jitter;
+		uv_fx.x += jitter;
 
 		float tear = step(0.85, hash12(vec2(sec, 91.7)));
-		uv_gl.y += tear * (hash12(vec2(band, 13.1)) - 0.5) * 0.01 * glitch;
+		uv_fx.y += tear * (hash12(vec2(band, 13.1)) - 0.5) * 0.01 * glitch;
 
-		uv_gl = clamp(uv_gl, vec2(0.0), vec2(1.0));
+		uv_fx = clamp(uv_fx, vec2(0.0), vec2(1.0));
 	}
 
 	// Base color with chroma
 	float chroma = chroma_strength + (glitch * 1.2);
-	vec3 col = sample_rgb(uv_gl, chroma);
+	vec3 col = sample_rgb(uv_fx, chroma);
 
 	// Overall soften
 	if (soften_strength > 0.001 && soften_radius_px > 0.0) {
-		vec3 blur = soften(uv_gl, soften_radius_px);
+		vec3 blur = soften(uv_fx, soften_radius_px);
 		col = mix(col, blur, soften_strength);
+	}
+
+	// Focus-hunt defocus during warmup (fades out)
+	if (warm_active && warmup_defocus_strength > 0.001 && warmup_defocus_radius_px > 0.0) {
+		vec3 wblur = soften(uv_fx, soften_radius_px + warmup_defocus_radius_px);
+		col = mix(col, wblur, warmup_defocus_strength * phase);
 	}
 
 	// Edge-only extra soften (CRT glass)
 	if (edge_soften_strength > 0.001 && edge_soften_radius_px > 0.0) {
-		vec2 pp = uv_gl * 2.0 - 1.0;
+		vec2 pp = uv_fx * 2.0 - 1.0;
 		float edge = smoothstep(edge_soften_start, edge_soften_end, dot(pp, pp));
-		vec3 eblur = soften(uv_gl, edge_soften_radius_px);
+		vec3 eblur = soften(uv_fx, edge_soften_radius_px);
 		col = mix(col, eblur, edge_soften_strength * edge);
 	}
 
@@ -189,9 +231,9 @@ void fragment() {
 
 		vec2 off_uv = dir * (phosphor_offset_px * px);
 
-		vec3 g0 = sample_rgb(clamp(uv_gl + off_uv, vec2(0.0), vec2(1.0)), chroma * 0.5);
-		vec3 g1 = sample_rgb(clamp(uv_gl + off_uv + vec2(px.x, 0.0), vec2(0.0), vec2(1.0)), 0.0);
-		vec3 g2 = sample_rgb(clamp(uv_gl + off_uv - vec2(px.x, 0.0), vec2(0.0), vec2(1.0)), 0.0);
+		vec3 g0 = sample_rgb(clamp(uv_fx + off_uv, vec2(0.0), vec2(1.0)), chroma * 0.5);
+		vec3 g1 = sample_rgb(clamp(uv_fx + off_uv + vec2(px.x, 0.0), vec2(0.0), vec2(1.0)), 0.0);
+		vec3 g2 = sample_rgb(clamp(uv_fx + off_uv - vec2(px.x, 0.0), vec2(0.0), vec2(1.0)), 0.0);
 
 		vec3 ghost = mix(g0, (g0 + g1 + g2) / 3.0, phosphor_soften);
 
@@ -214,7 +256,7 @@ void fragment() {
 		float frame = floor(TIME * 60.0);
 		float parity = mod(frame, 2.0);
 		float row = mod(floor(uv_pat.y * tex_sz.y), 2.0);
-		float match = 1.0 - abs(row - parity); // 1 when same parity, 0 otherwise
+		float match = 1.0 - abs(row - parity);
 		float inter = 1.0 - interlace_strength * (1.0 - match);
 		col *= inter;
 	}
@@ -226,7 +268,7 @@ void fragment() {
 	}
 
 	// Vignette
-	vec2 p = uv_gl * 2.0 - 1.0;
+	vec2 p = uv_fx * 2.0 - 1.0;
 	float v = 1.0 - vignette_strength * smoothstep(0.2, 1.1, dot(p, p));
 	col *= v;
 
@@ -234,6 +276,34 @@ void fragment() {
 	float n = hash12(uv_pat * (TIME * 60.0));
 	float ns = noise_strength + glitch * 0.08;
 	col += (n - 0.5) * ns;
+
+	// ----------------------------
+	// Warm-up overlay: soft center bloom + late fade-in
+	// ----------------------------
+	if (warm_active) {
+		// Soft expanding “aperture” (a warm blob opening up, not a sharp line)
+		vec2 q = (uv_fx - vec2(0.5)) / vec2(1.0, 0.78);
+		float dist = length(q);
+
+		float radius = mix(0.03, 1.25, pow(open, 1.35));
+		float aperture = 1.0 - smoothstep(radius, radius + warmup_aperture_softness, dist);
+
+		// Title/content fade-in LATE in the warmup
+		float content_fade = smoothstep(warmup_fade_in_start, warmup_fade_in_end, wup);
+
+		// Keep a tiny hint early, but not readable
+		float early_hint = aperture * 0.10;
+
+		float vis = max(early_hint, content_fade);
+
+		// Warm glow that fades out as it stabilizes
+		float glow = exp(-dist * dist * 10.0) * phase * warmup_glow_strength;
+		col += glow * 0.75;
+
+		// Gentle “power settling” brightness wobble
+		float buzz = 1.0 + phase * (0.05 * sin(local_t * 22.0) + 0.03 * sin(local_t * 9.0));
+		col *= vis * buzz;
+	}
 
 	// Apply curvature mask
 	col *= inside;
