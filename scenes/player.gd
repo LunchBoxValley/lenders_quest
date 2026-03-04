@@ -112,6 +112,10 @@ signal turn_taken(player_grid_pos: Vector2i)
 @export var exit_blink_enabled: bool = true
 @export var exit_blink_period_sec: float = 0.25
 
+# Palette (2-tone shader via PaletteManager)
+@export var apply_player_palette_on_ready: bool = true
+@export var player_palette_preset: StringName = &"BONE"
+
 var map: TileMapLayer
 var cam: Node
 
@@ -168,6 +172,7 @@ func _ready() -> void:
 
 	hp = max_hp
 	_apply_loadout_from_shop()
+	_apply_player_palette_if_needed()
 
 	# Snap player to grid
 	var local_pos: Vector2 = map.to_local(global_position)
@@ -230,6 +235,14 @@ func _apply_loadout_from_shop() -> void:
 	elif GameManager.shop_item_id == 3:
 		_potion_charges = 1
 
+
+func _apply_player_palette_if_needed() -> void:
+	if not apply_player_palette_on_ready:
+		return
+	if visual == null:
+		return
+	# PaletteManager must be an Autoload singleton named "PaletteManager".
+	PaletteManager.apply_to_node(visual, player_palette_preset)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if _busy or _dead or _exiting:

@@ -31,6 +31,18 @@ extends Node2D
 # Pressure after treasure (1 extra turn => total 2 turns)
 @export var extra_turns_when_player_has_treasure: int = 1
 
+# Palette preset for this enemy. Leave blank to randomize.
+@export var enemy_palette_preset: StringName = &""
+const RANDOM_ENEMY_PALETTES: PackedStringArray = [
+	"SLIME",
+	"BLOOD",
+	"ICE",
+	"NEON",
+	"SAND",
+	"VOID",
+]
+
+
 var map: TileMapLayer
 var player: Node
 var cam: Node
@@ -58,6 +70,8 @@ func _ready() -> void:
 
 	hp = max_hp
 
+	_apply_palette_to_enemy()
+
 	# Snap to grid
 	var local_pos: Vector2 = map.to_local(global_position)
 	grid_pos = map.local_to_map(local_pos + Vector2(float(tile_size) * 0.5, float(tile_size) * 0.5))
@@ -70,6 +84,20 @@ func _ready() -> void:
 			player.connect("turn_taken", c)
 
 	queue_redraw()
+
+func _apply_palette_to_enemy() -> void:
+	# PaletteManager must be an Autoload singleton named "PaletteManager".
+	# Applies to this enemy's Sprite2D material (if it uses the 2-tone palette shader).
+	if body == null:
+		return
+	var preset: StringName = enemy_palette_preset
+	if String(preset) == "":
+		var n: int = RANDOM_ENEMY_PALETTES.size()
+		if n <= 0:
+			return
+		var idx: int = int(randi() % n)
+		preset = StringName(String(RANDOM_ENEMY_PALETTES[idx]))
+	PaletteManager.apply_to_sprite(body, preset)
 
 
 func _resolve_refs() -> void:

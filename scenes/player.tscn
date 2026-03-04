@@ -3,8 +3,15 @@
 [ext_resource type="Texture2D" uid="uid://cmke1g7bfgxm6" path="res://assets/tilesets/tileset.png" id="1_3vyb7"]
 [ext_resource type="Script" uid="uid://bcyc6u22cdjqr" path="res://scenes/player.gd" id="1_g2els"]
 [ext_resource type="Shader" uid="uid://dqdptsyxdsil7" path="res://shaders/palette_2tone.gdshader" id="2_qhqgy"]
+[ext_resource type="Script" uid="uid://c4c1ilhnth0jw" path="res://scripts/random_sword_palette.gd" id="4_dqkch"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_dqkch"]
+shader = ExtResource("2_qhqgy")
+shader_parameter/main_color = Color(0.9411765, 0.9647059, 0.9411765, 1)
+shader_parameter/shadow_color = Color(0.7764706, 0.7921569, 0.7921569, 1)
+shader_parameter/tolerance = 0.05
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_qhqgy"]
 shader = ExtResource("2_qhqgy")
 shader_parameter/main_color = Color(0.9411765, 0.9647059, 0.9411765, 1)
 shader_parameter/shadow_color = Color(0.7764706, 0.7921569, 0.7921569, 1)
@@ -26,11 +33,13 @@ region_rect = Rect2(64, 0, 16, 16)
 position = Vector2(3, 2)
 
 [node name="SwordSprite" type="Sprite2D" parent="Visual/HandSocket" unique_id=1529365881]
+material = SubResource("ShaderMaterial_qhqgy")
 position = Vector2(2, -2)
 texture = ExtResource("1_3vyb7")
 offset = Vector2(1, -1)
 region_enabled = true
 region_rect = Rect2(96, 0, 16, 16)
+script = ExtResource("4_dqkch")
 
 [node name="SwordTip" type="Marker2D" parent="Visual/HandSocket" unique_id=287299798]
 position = Vector2(5, -5)

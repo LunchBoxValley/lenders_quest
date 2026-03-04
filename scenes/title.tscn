@@ -4,6 +4,7 @@
 [ext_resource type="PackedScene" uid="uid://cbjsobhk7y54s" path="res://scenes/contract.tscn" id="2_pyl7j"]
 [ext_resource type="Script" uid="uid://bo0mj1sfat7ua" path="res://scenes/label_2.gd" id="3_b3w7a"]
 [ext_resource type="Script" uid="uid://5615wb1tsgqv" path="res://scenes/CRTController_Title.gd" id="3_pyl7j"]
+[ext_resource type="Script" uid="uid://ccsfbi5hlkw33" path="res://scripts/random_label_palette.gd" id="3_yql1r"]
 [ext_resource type="Shader" uid="uid://dffsrlv0h7r5j" path="res://scenes/title.gdshader" id="4_b3w7a"]
 [ext_resource type="Script" uid="uid://bvpsanq6mgyal" path="res://scenes/color_rect.gd" id="6_4rr2b"]
 
@@ -12,6 +13,13 @@ shader = ExtResource("4_b3w7a")
 shader_parameter/warmup_enabled = true
 shader_parameter/warmup_start_time = 0.0
 shader_parameter/warmup_duration = 2.0
+shader_parameter/warmup_aperture_softness = 0.22
+shader_parameter/warmup_glow_strength = 0.85
+shader_parameter/warmup_fade_in_start = 0.7
+shader_parameter/warmup_fade_in_end = 1.0
+shader_parameter/warmup_defocus_strength = 0.85
+shader_parameter/warmup_defocus_radius_px = 1.3
+shader_parameter/warmup_wobble_uv = 0.0035
 shader_parameter/scanline_strength = 0.55
 shader_parameter/scanline_density = 450.0
 shader_parameter/scanline_thickness = 0.85
@@ -52,6 +60,7 @@ offset_bottom = 241.0
 color = Color(0.13333334, 0.13725491, 0.13725491, 1)
 
 [node name="Hud" type="CanvasLayer" parent="." unique_id=2125796130]
+script = ExtResource("3_yql1r")
 
 [node name="Label" type="Label" parent="Hud" unique_id=55800458]
 offset_right = 140.0

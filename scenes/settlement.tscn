@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://dgvwduvo2gd0h"]
 
 [ext_resource type="Script" uid="uid://6jdj12pyq2a8" path="res://scenes/settlement.gd" id="1_87fap"]
+[ext_resource type="Script" uid="uid://ccsfbi5hlkw33" path="res://scripts/random_label_palette.gd" id="2_m7gwf"]
 [ext_resource type="Shader" uid="uid://bydbdvo16euml" path="res://scenes/settlement.gdshader" id="3_7go5f"]
 [ext_resource type="Script" uid="uid://ba6bk76b07t5j" path="res://scenes/CrtControllerSettle.gd" id="3_m7gwf"]
 
@@ -46,6 +47,7 @@ offset_bottom = 240.0
 color = Color(0.13333334, 0.13725491, 0.13725491, 1)
 
 [node name="HUD" type="CanvasLayer" parent="." unique_id=1988541652]
+script = ExtResource("2_m7gwf")
 
 [node name="ResultLabel" type="Label" parent="HUD" unique_id=1457088397]
 offset_right = 40.0
