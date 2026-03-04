@@ -2,6 +2,13 @@
 
 [ext_resource type="Texture2D" uid="uid://cmke1g7bfgxm6" path="res://assets/tilesets/tileset.png" id="1_3vyb7"]
 [ext_resource type="Script" uid="uid://bcyc6u22cdjqr" path="res://scenes/player.gd" id="1_g2els"]
+[ext_resource type="Shader" uid="uid://dqdptsyxdsil7" path="res://shaders/palette_2tone.gdshader" id="2_qhqgy"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_dqkch"]
+shader = ExtResource("2_qhqgy")
+shader_parameter/main_color = Color(0.9411765, 0.9647059, 0.9411765, 1)
+shader_parameter/shadow_color = Color(0.7764706, 0.7921569, 0.7921569, 1)
+shader_parameter/tolerance = 0.05
 
 [node name="Player" type="Node2D" unique_id=318157462]
 z_index = 10
@@ -10,6 +17,7 @@ script = ExtResource("1_g2els")
 [node name="Visual" type="Node2D" parent="." unique_id=1575871161]
 
 [node name="Body" type="Sprite2D" parent="Visual" unique_id=88953638]
+material = SubResource("ShaderMaterial_dqkch")
 texture = ExtResource("1_3vyb7")
 region_enabled = true
 region_rect = Rect2(64, 0, 16, 16)
