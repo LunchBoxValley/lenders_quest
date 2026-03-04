@@ -116,7 +116,7 @@ offset_right = 20.0
 offset_bottom = -19.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_font_sizes/font_size = 12
+theme_override_font_sizes/font_size = 10
 
 [node name="TileMapLayer" type="TileMapLayer" parent="." unique_id=812214259]
 y_sort_enabled = true

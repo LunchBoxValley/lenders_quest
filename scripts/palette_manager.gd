@@ -1,5 +1,5 @@
 extends Node
-class_name PaletteManager
+# (NO class_name here — Autoload already provides the global PaletteManager)
 
 # PICO-8 palette
 const P: Dictionary = {
@@ -21,8 +21,7 @@ const P: Dictionary = {
 	"PEACH":  Color("#FFCCAA"),
 }
 
-# Presets store two colors: main + shadow
-# Each preset value is a Dictionary with keys "main" and "shadow" (both Color).
+# Two-tone presets: {main, shadow}
 const PRESETS: Dictionary = {
 	"BONE":   {"main": P["WHITE"],  "shadow": P["LTGRAY"]},
 	"SLIME":  {"main": P["LIME"],   "shadow": P["GREEN"]},
@@ -42,24 +41,20 @@ func apply_to_sprite(sprite: Sprite2D, preset_name: StringName) -> void:
 		return
 
 	var mat: ShaderMaterial = sprite.material as ShaderMaterial
-	if mat == null:
-		return
-	if mat.shader == null:
+	if mat == null or mat.shader == null:
 		return
 
 	# Make the material instance-local so we don't recolor shared resources
 	sprite.material = mat.duplicate(true)
 	mat = sprite.material as ShaderMaterial
-	if mat == null:
+	if mat == null or mat.shader == null:
 		return
 
-	# Only apply if shader has these uniforms
 	if not _shader_has_uniform(mat.shader, "main_color"):
 		return
 	if not _shader_has_uniform(mat.shader, "shadow_color"):
 		return
 
-	# Typed access (avoid Variant inference warnings)
 	var preset_dict: Dictionary = PRESETS[key] as Dictionary
 	var main_c: Color = preset_dict["main"] as Color
 	var shadow_c: Color = preset_dict["shadow"] as Color
