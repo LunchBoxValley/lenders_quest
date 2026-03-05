@@ -8,6 +8,7 @@
 [ext_resource type="Shader" uid="uid://dqdptsyxdsil7" path="res://shaders/palette_2tone.gdshader" id="2_trceg"]
 [ext_resource type="PackedScene" uid="uid://7n84pvrirrmd" path="res://scenes/step_dust.tscn" id="3_tbgi4"]
 [ext_resource type="Script" uid="uid://wsgexrmf7ff" path="res://scripts/random_map_palette.gd" id="4_a8y0u"]
+[ext_resource type="Script" uid="uid://tdyy0w31iir5" path="res://scenes/MapGenerator.gd" id="4_jkv2x"]
 [ext_resource type="Script" uid="uid://en0dusjbmb2k" path="res://scenes/camera_2d.gd" id="4_jyhfs"]
 [ext_resource type="PackedScene" uid="uid://dgvwduvo2gd0h" path="res://scenes/settlement.tscn" id="6_85g3d"]
 [ext_resource type="Script" uid="uid://cgbrau7cs4cfv" path="res://scenes/CRTController.gd" id="6_o6xl0"]
@@ -133,6 +134,11 @@ offset_bottom = -19.0
 grow_horizontal = 2
 grow_vertical = 2
 theme_override_font_sizes/font_size = 10
+
+[node name="MapGenerator" type="Node" parent="." unique_id=459141810]
+script = ExtResource("4_jkv2x")
+map_path = NodePath("../TileMapLayer")
+player_path = NodePath("../Player")
 
 [node name="TileMapLayer" type="TileMapLayer" parent="." unique_id=812214259]
 y_sort_enabled = true
