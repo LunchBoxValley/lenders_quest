@@ -123,6 +123,7 @@ var grid_pos: Vector2i
 var hp: int
 var _hit_flash_playing: bool = false
 var _busy: bool = false
+var _turn_locked: bool = false
 var _dead: bool = false
 var _exiting: bool = false
 
@@ -219,6 +220,11 @@ func _ready() -> void:
 	queue_redraw()
 
 
+# Called by Main.gd during the enemy phase so the player can't act mid-enemy-turn.
+func set_turn_locked(locked: bool) -> void:
+	_turn_locked = locked
+
+
 # ----------------------------
 # Loadout
 # ----------------------------
@@ -251,7 +257,7 @@ func _apply_player_palette_if_needed() -> void:
 	PaletteManager.apply_to_node(visual, player_palette_preset)
 
 func _unhandled_input(event: InputEvent) -> void:
-	if _busy or _dead or _exiting:
+	if _busy or _turn_locked or _dead or _exiting:
 		return
 
 	if event.is_action_pressed("ui_accept"):

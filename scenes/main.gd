@@ -12,7 +12,7 @@ extends Node
 @export var enemy_spawn_attempts: int = 200
 
 @export var enemy_min_dist_from_player: int = 6
-@export var enemy_max_dist_from_player: int = 14   # <-- IMPORTANT: keeps them in nearby screens
+@export var enemy_max_dist_from_player: int = 14  # keeps them near-ish for room camera
 
 @export var enemy_min_dist_from_exit: int = 4
 @export var enemy_max_dist_from_exit: int = 999
@@ -20,44 +20,93 @@ extends Node
 @export var enemy_min_dist_from_treasure: int = 4
 @export var enemy_max_dist_from_treasure: int = 999
 
-# Debug so we can see what's happening
-@export var debug_print_enemy_spawns: bool = true
+# --- Turn feel / juice ---
+@export var enemy_step_delay_sec: float = 0.03  # set to 0.3 if you want slower “click…click…click…”
+
+var _player: Node
+var _enemy_phase_running: bool = false
 
 
 func _ready() -> void:
 	randomize()
 
-	var player: Node = get_node_or_null(player_path)
+	_player = get_node_or_null(player_path)
+
 	var label: Label = get_node_or_null(debt_label_path) as Label
 
-	if player != null and GameManager.has_method("bind_player"):
-		GameManager.bind_player(player)
-
+	# Bind GameManager (safe if methods exist)
+	if _player != null and GameManager.has_method("bind_player"):
+		GameManager.bind_player(_player)
 	if label != null and GameManager.has_method("bind_debt_label"):
 		GameManager.bind_debt_label(label)
 
-	if player != null:
-		call_deferred("_ensure_spawn_and_place_enemies", player)
+	# Ensure enemies exist + placed
+	if _player != null:
+		call_deferred("_ensure_spawn_and_place_enemies")
+
+	# Listen for player turns so we can run the enemy phase
+	if _player != null and _player.has_signal("turn_taken"):
+		var c := Callable(self, "_on_player_turn_taken")
+		if not _player.is_connected("turn_taken", c):
+			_player.connect("turn_taken", c)
 
 
-func _ensure_spawn_and_place_enemies(player: Node) -> void:
+func _on_player_turn_taken(player_grid_pos: Vector2i) -> void:
+	if _enemy_phase_running:
+		return
+	_enemy_phase_running = true
+
+	# Lock player input while enemies move (prevents “double turns”)
+	if _player != null and _player.has_method("set_turn_locked"):
+		_player.set_turn_locked(true)
+
+	await _run_enemy_turns(player_grid_pos)
+
+	if _player != null and _player.has_method("set_turn_locked"):
+		_player.set_turn_locked(false)
+
+	_enemy_phase_running = false
+
+
+func _run_enemy_turns(player_grid_pos: Vector2i) -> void:
 	var tree := get_tree()
 	if tree == null:
 		return
 
-	# Wait a frame so any pre-placed enemies run _ready() and join "enemies"
+	# Snapshot enemies in a stable order so it feels consistent
+	var enemies: Array = tree.get_nodes_in_group("enemies")
+	enemies.sort_custom(func(a, b): return String(a.name) < String(b.name))
+
+	for e in enemies:
+		if e == null or not is_instance_valid(e):
+			continue
+		if not e.has_method("take_turn"):
+			continue
+
+		await e.take_turn(player_grid_pos)
+
+		if enemy_step_delay_sec > 0.0:
+			await tree.create_timer(enemy_step_delay_sec).timeout
+
+
+# ----------------------------
+# Spawn + place enemies at run start
+# ----------------------------
+func _ensure_spawn_and_place_enemies() -> void:
+	var tree := get_tree()
+	if tree == null:
+		return
+
+	# Wait 1 frame so any pre-placed enemies run _ready() and join "enemies"
 	await tree.process_frame
 
 	_ensure_enemy_count()
 
-	# Wait a frame so newly spawned enemies also join "enemies"
+	# Wait 1 frame so newly spawned enemies also join "enemies"
 	await tree.process_frame
 
-	if randomize_start_enemies:
-		_reposition_start_enemies(player)
-
-	if debug_print_enemy_spawns:
-		_debug_print_enemies()
+	if randomize_start_enemies and _player != null:
+		_reposition_start_enemies(_player)
 
 
 func _ensure_enemy_count() -> void:
@@ -68,17 +117,17 @@ func _ensure_enemy_count() -> void:
 	if tree == null:
 		return
 
-	var enemies: Array = tree.get_nodes_in_group("enemies")
-	var current_count: int = enemies.size()
+	var current: Array = tree.get_nodes_in_group("enemies")
+	var count: int = current.size()
 
-	if current_count >= start_enemy_count:
+	if count >= start_enemy_count:
 		return
 
 	if enemy_scene == null:
 		push_warning("Main.gd: enemy_scene is NOT set. Drag res://scenes/enemy.tscn into the Inspector.")
 		return
 
-	var to_make: int = start_enemy_count - current_count
+	var to_make: int = start_enemy_count - count
 	for i in range(to_make):
 		var inst: Node = enemy_scene.instantiate()
 		add_child(inst)
@@ -96,6 +145,7 @@ func _reposition_start_enemies(player: Node) -> void:
 	if tree == null:
 		return
 
+	# Require helper methods from player.gd
 	if not player.has_method("get_grid_pos"):
 		return
 	if not player.has_method("get_walkable_floor_candidates"):
@@ -111,7 +161,6 @@ func _reposition_start_enemies(player: Node) -> void:
 	if player.has_method("get_run_treasure_pos"):
 		treasure_pos = player.get_run_treasure_pos()
 
-	# Candidates from player helper (already excludes blocked/hazard/door/exit/treasure/landmark/player tile)
 	var candidates: Array[Vector2i] = player.get_walkable_floor_candidates(true)
 	if candidates.is_empty():
 		return
@@ -120,7 +169,7 @@ func _reposition_start_enemies(player: Node) -> void:
 	if enemies.is_empty():
 		return
 
-	var used: Dictionary = {} # Vector2i -> true
+	var used: Dictionary = {}
 
 	for e in enemies:
 		if e == null or not is_instance_valid(e):
@@ -149,7 +198,7 @@ func _reposition_start_enemies(player: Node) -> void:
 
 			legal.append(c)
 
-		var pick: Vector2i = Vector2i(999999, 999999)
+		var pick: Vector2i
 
 		if not legal.is_empty():
 			pick = legal[randi() % legal.size()]
@@ -170,18 +219,3 @@ func _reposition_start_enemies(player: Node) -> void:
 
 		used[pick] = true
 		e.set_grid_pos(pick)
-
-
-func _debug_print_enemies() -> void:
-	var tree := get_tree()
-	if tree == null:
-		return
-	var enemies: Array = tree.get_nodes_in_group("enemies")
-	print("Enemies in group:", enemies.size())
-	for e in enemies:
-		if e == null or not is_instance_valid(e):
-			continue
-		var gp: Variant = null
-		if e.has_method("get_grid_pos"):
-			gp = e.get_grid_pos()
-		print(" - ", e.name, " grid_pos=", gp)

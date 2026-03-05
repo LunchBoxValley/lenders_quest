@@ -11,26 +11,37 @@ extends Node2D
 
 @export var move_time: float = 0.10
 
+# Telegraph (enemy "leans" before hitting)
 @export var telegraph_damage_bonus: int = 1
 @export var telegraph_lean_px: int = 3
 @export var telegraph_lean_time: float = 0.08
 
+# Step dust
 @export var step_dust_scene: PackedScene
 @export var step_dust_offset_y: float = 6.0
 @export var step_dust_trail_px: float = 4.0
 
+# HP bar
 @export var hp_per_segment: int = 2
 @export var hp_bar_offset_y: int = 4
 @export var hp_seg_w: int = 3
 @export var hp_seg_h: int = 2
 @export var hp_seg_gap: int = 1
 
+# Pressure after treasure (adds extra moves inside take_turn)
 @export var extra_turns_when_player_has_treasure: int = 1
 
-# Palette (optional)
+# Palette (2-tone shader via PaletteManager)
 @export var enemy_palette_preset: StringName = &""
 @export var randomize_enemy_palette: bool = true
-const ENEMY_RANDOM_PALETTES: PackedStringArray = ["SLIME","BLOOD","ICE","NEON","SAND","VOID"]
+const ENEMY_RANDOM_PALETTES: PackedStringArray = [
+	"SLIME",
+	"BLOOD",
+	"ICE",
+	"NEON",
+	"SAND",
+	"VOID",
+]
 
 var map: TileMapLayer
 var player: Node
@@ -50,8 +61,10 @@ func _ready() -> void:
 	randomize()
 
 	_resolve_refs()
+
+	# If we still can't find the map, we can't function safely.
 	if map == null:
-		push_warning("Enemy has no map reference.")
+		push_warning("Enemy has no map reference. Check map_path or scene structure.")
 		queue_free()
 		return
 
@@ -63,11 +76,6 @@ func _ready() -> void:
 	grid_pos = map.local_to_map(local_pos + Vector2(float(tile_size) * 0.5, float(tile_size) * 0.5))
 	global_position = map.to_global(map.map_to_local(grid_pos))
 
-	if player != null and player.has_signal("turn_taken"):
-		var c := Callable(self, "_on_player_turn_taken")
-		if not player.is_connected("turn_taken", c):
-			player.connect("turn_taken", c)
-
 	queue_redraw()
 
 
@@ -78,21 +86,33 @@ func _apply_enemy_palette_if_needed() -> void:
 	if String(preset) == "" and randomize_enemy_palette:
 		var n: int = ENEMY_RANDOM_PALETTES.size()
 		if n > 0:
-			preset = StringName(String(ENEMY_RANDOM_PALETTES[int(randi() % n)]))
+			var idx: int = int(randi() % n)
+			preset = StringName(String(ENEMY_RANDOM_PALETTES[idx]))
 	if String(preset) == "":
 		return
+	# PaletteManager must be an Autoload singleton named "PaletteManager".
 	PaletteManager.apply_to_sprite(body, preset)
 
 
 func _resolve_refs() -> void:
-	map = get_node_or_null(map_path) as TileMapLayer
-	player = get_node_or_null(player_path)
-	cam = get_node_or_null(camera_path)
-
+	# --- MAP ---
+	map = null
+	if map_path != NodePath("") and str(map_path) != "":
+		map = get_node_or_null(map_path) as TileMapLayer
 	if map == null:
 		map = _find_tilemaplayer()
+
+	# --- PLAYER ---
+	player = null
+	if player_path != NodePath("") and str(player_path) != "":
+		player = get_node_or_null(player_path)
 	if player == null:
 		player = _find_node_named_upwards("Player")
+
+	# --- CAMERA ---
+	cam = null
+	if camera_path != NodePath("") and str(camera_path) != "":
+		cam = get_node_or_null(camera_path)
 	if cam == null:
 		cam = _find_camera2d_upwards()
 
@@ -108,13 +128,17 @@ func _find_tilemaplayer() -> TileMapLayer:
 
 
 func _find_node_named_upwards(name: StringName) -> Node:
+	# Check parents for a sibling/child with this name
 	var n: Node = get_parent()
 	while n != null:
 		var found: Node = n.get_node_or_null(NodePath(String(name)))
 		if found != null:
 			return found
 		n = n.get_parent()
-	return get_tree().get_root().find_child(String(name), true, false)
+
+	# Last resort: global search
+	var root: Node = get_tree().get_root()
+	return root.find_child(String(name), true, false)
 
 
 func _find_camera2d_upwards() -> Node:
@@ -123,21 +147,31 @@ func _find_camera2d_upwards() -> Node:
 		for child in n.get_children():
 			if child is Camera2D:
 				return child
+			# common setup: Camera2D under Player
+			if child.name == "Player":
+				var cam2: Node = child.find_child("Camera2D", true, false)
+				if cam2 != null:
+					return cam2
 		n = n.get_parent()
+
 	return get_tree().get_root().find_child("Camera2D", true, false)
 
 
-func _on_player_turn_taken(player_grid_pos: Vector2i) -> void:
-	await take_turn(player_grid_pos)
-	if GameManager.has_treasure and extra_turns_when_player_has_treasure > 0:
-		for _i in range(extra_turns_when_player_has_treasure):
-			await take_turn(player_grid_pos)
-
-
+# Main calls this once per enemy, in order.
 func take_turn(player_grid_pos: Vector2i) -> void:
 	if player == null or map == null:
 		return
 
+	var turns: int = 1
+	if GameManager.has_treasure:
+		turns += maxi(0, extra_turns_when_player_has_treasure)
+
+	for _i in range(turns):
+		await _take_one_turn(player_grid_pos)
+
+
+func _take_one_turn(player_grid_pos: Vector2i) -> void:
+	# Telegraph follow-up
 	if _telegraphing:
 		if _manhattan(grid_pos, player_grid_pos) == 1:
 			if player.has_method("take_damage"):
@@ -146,10 +180,12 @@ func take_turn(player_grid_pos: Vector2i) -> void:
 		_end_telegraph()
 		return
 
+	# Begin telegraph when adjacent
 	if _manhattan(grid_pos, player_grid_pos) == 1:
 		_begin_telegraph(player_grid_pos)
 		return
 
+	# Chase
 	var step: Vector2i = _choose_step_toward(player_grid_pos)
 	if step == Vector2i.ZERO:
 		return
@@ -190,14 +226,24 @@ func _choose_step_toward(target: Vector2i, force_other_axis: bool = false) -> Ve
 		else:
 			return Vector2i(sign(dx), 0) if randi() % 2 == 0 else Vector2i(0, sign(dy))
 	else:
-		return Vector2i(0, sign(dy)) if abs(dx) >= abs(dy) else Vector2i(sign(dx), 0)
+		if abs(dx) >= abs(dy):
+			return Vector2i(0, sign(dy))
+		else:
+			return Vector2i(sign(dx), 0)
 
 
 func _begin_telegraph(player_grid_pos: Vector2i) -> void:
 	_telegraphing = true
+
 	var dx: int = player_grid_pos.x - grid_pos.x
 	var dy: int = player_grid_pos.y - grid_pos.y
-	_telegraph_dir = Vector2i(sign(dx), 0) if abs(dx) >= abs(dy) else Vector2i(0, sign(dy))
+
+	if abs(dx) > abs(dy):
+		_telegraph_dir = Vector2i(sign(dx), 0)
+	elif abs(dy) > abs(dx):
+		_telegraph_dir = Vector2i(0, sign(dy))
+	else:
+		_telegraph_dir = Vector2i(sign(dx), 0) if randi() % 2 == 0 else Vector2i(0, sign(dy))
 
 	var target := Vector2(float(_telegraph_dir.x * telegraph_lean_px), float(_telegraph_dir.y * telegraph_lean_px))
 	var tw := create_tween()
@@ -211,6 +257,8 @@ func _end_telegraph() -> void:
 
 
 func _is_blocked(tile: Vector2i) -> bool:
+	if map == null:
+		return true
 	var td: TileData = map.get_cell_tile_data(tile)
 	if td == null:
 		return true
@@ -224,11 +272,14 @@ func _manhattan(a: Vector2i, b: Vector2i) -> int:
 func _spawn_step_dust(move_dir: Vector2i) -> void:
 	if step_dust_scene == null:
 		return
+
 	var d := step_dust_scene.instantiate() as Node2D
 	get_parent().add_child(d)
+
 	var behind := Vector2(-float(move_dir.x), -float(move_dir.y)) * step_dust_trail_px
 	var feet := Vector2(0.0, step_dust_offset_y)
 	var spawn_pos := global_position + feet + behind
+
 	if d.has_method("setup"):
 		d.setup(spawn_pos)
 	else:
@@ -247,7 +298,6 @@ func get_grid_pos() -> Vector2i:
 	return grid_pos
 
 
-# NEW: lets Main reposition enemies safely
 func set_grid_pos(new_grid_pos: Vector2i) -> void:
 	grid_pos = new_grid_pos
 	_telegraphing = false
