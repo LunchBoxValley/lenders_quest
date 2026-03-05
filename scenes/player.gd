@@ -180,10 +180,11 @@ func _ready() -> void:
 	global_position = map.to_global(map.map_to_local(grid_pos))
 
 	# Randomize exit BEFORE caching exits for blink
+	var exit_tmpl: Dictionary = {}
 	if randomize_exit_each_run:
-		var tmpl: Dictionary = _get_exit_template()
-		if not tmpl.is_empty():
-			_run_exit_pos = _place_random_exit_tile(tmpl)
+		exit_tmpl = _get_exit_template()
+		if not exit_tmpl.is_empty():
+			_run_exit_pos = _place_random_exit_tile(exit_tmpl)
 
 	_cache_exit_tiles()
 
@@ -199,6 +200,11 @@ func _ready() -> void:
 	# Place treasure (prefer near landmark)
 	if randomize_treasure_each_run:
 		_run_treasure_pos = _place_random_treasure_tile()
+
+	# Ensure the exit isn't camping the treasure (exit is placed before treasure)
+	if randomize_exit_each_run and not exit_tmpl.is_empty():
+		_ensure_exit_far_from_treasure(exit_tmpl)
+		_cache_exit_tiles()
 
 	# Show clue
 	if run_start_clue_enabled and _run_treasure_pos.x < 900000:
@@ -601,6 +607,52 @@ func _place_random_exit_tile(tmpl: Dictionary) -> Vector2i:
 	return pick
 
 
+func _ensure_exit_far_from_treasure(tmpl: Dictionary) -> void:
+	# Exit is placed before treasure, so after treasure placement we enforce a minimum distance.
+	if _run_exit_pos.x >= 900000:
+		return
+	if _run_treasure_pos.x >= 900000:
+		return
+
+	# Already far enough
+	if _manhattan(_run_exit_pos, _run_treasure_pos) >= min_exit_dist_from_treasure:
+		return
+
+	# Clear any existing exit tiles back to floor
+	for cell in map.get_used_cells():
+		var td: TileData = map.get_cell_tile_data(cell)
+		if td != null and bool(td.get_custom_data(exit_custom_key)):
+			map.set_cell(cell, tile_source_id, floor_atlas_coords, 0)
+
+	var candidates: Array[Vector2i] = _gather_floor_candidates(true)
+	if candidates.is_empty():
+		return
+
+	# Prefer candidates that satisfy BOTH: far from player AND far from treasure
+	var legal: Array[Vector2i] = []
+	for c in candidates:
+		if _manhattan(c, grid_pos) < min_exit_dist_from_player:
+			continue
+		if _manhattan(c, _run_treasure_pos) < min_exit_dist_from_treasure:
+			continue
+		legal.append(c)
+
+	var pick2: Vector2i
+	if not legal.is_empty():
+		pick2 = legal[randi() % legal.size()]
+	else:
+		# Fallback: at least be far from player (original rule)
+		pick2 = candidates[randi() % candidates.size()]
+		for _i in range(placement_attempts):
+			var c2: Vector2i = candidates[randi() % candidates.size()]
+			if _manhattan(c2, grid_pos) >= min_exit_dist_from_player:
+				pick2 = c2
+				break
+
+	map.set_cell(pick2, int(tmpl["sid"]), tmpl["ac"], int(tmpl["alt"]))
+	_run_exit_pos = pick2
+
+
 # ----------------------------
 # Landmark: collect + place
 # ----------------------------
@@ -682,10 +734,12 @@ func _place_random_treasure_tile() -> Vector2i:
 			if d >= landmark_treasure_min_dist and d <= landmark_treasure_max_dist:
 				near.append(c)
 
-		# Relax if too strict on small maps
+		# Relax if too strict on small maps (but don't allow treasure directly on the landmark)
 		if near.is_empty():
+			var relaxed_min: int = maxi(1, landmark_treasure_min_dist - 1)
 			for c2 in all_candidates:
-				if _manhattan(c2, _run_landmark_pos) <= landmark_treasure_max_dist:
+				var d2: int = _manhattan(c2, _run_landmark_pos)
+				if d2 >= relaxed_min and d2 <= landmark_treasure_max_dist:
 					near.append(c2)
 
 		# Prefer clean clue (same row/col) some of the time
@@ -1013,3 +1067,22 @@ func _draw() -> void:
 		if i < filled_segments:
 			col = Color(1, 1, 1, 1)
 		draw_rect(Rect2(Vector2(x, bar_y), Vector2(float(hp_seg_w), float(hp_seg_h))), col, true)
+
+
+# ----------------------------
+# Public helpers (used by Main.gd for enemy placement)
+# ----------------------------
+func get_grid_pos() -> Vector2i:
+	return grid_pos
+
+func get_run_exit_pos() -> Vector2i:
+	return _run_exit_pos
+
+func get_run_treasure_pos() -> Vector2i:
+	return _run_treasure_pos
+
+func get_run_landmark_pos() -> Vector2i:
+	return _run_landmark_pos
+
+func get_walkable_floor_candidates(avoid_exit_tile: bool = true) -> Array[Vector2i]:
+	return _gather_floor_candidates(avoid_exit_tile)

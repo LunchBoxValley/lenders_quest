@@ -1,118 +1,123 @@
-extends Node2D
+extends Node
 
-@export var player_path: NodePath = NodePath("Player")
-@export var debt_label_path: NodePath = NodePath("Hud/DebtLabel")
+@export var player_path: NodePath
+@export var debt_label_path: NodePath
 
-@export var toast_label_path: NodePath = NodePath("Hud/ToastLabel")
-@export var collector_toast_delay: float = 1.25
-@export var collector_toast_duration: float = 1.10
+# ------------------------------------------------
+# Enemy start placement rules (fairness)
+# ------------------------------------------------
+@export var randomize_start_enemies: bool = true
+@export var enemy_spawn_attempts: int = 200
 
-@export var collector_spawn_path: NodePath = NodePath("CollectorSpawn")
-@export var enemy_template_path: NodePath = NodePath("Enemy")
+@export var enemy_min_dist_from_player: int = 6
+@export var enemy_max_dist_from_player: int = 999
 
-const ENEMY_SCENE := preload("res://scenes/enemy.tscn")
+@export var enemy_min_dist_from_exit: int = 4
+@export var enemy_max_dist_from_exit: int = 999
 
-var _player: Node = null
-var _toast_label: Label = null
-var _toast_token: int = 0
-
-var _prev_has_treasure: bool = false
-var _collector_spawned: bool = false
+@export var enemy_min_dist_from_treasure: int = 4
+@export var enemy_max_dist_from_treasure: int = 999
 
 
 func _ready() -> void:
-	_player = get_node_or_null(player_path)
-	var label := get_node_or_null(debt_label_path) as Label
-	_toast_label = get_node_or_null(toast_label_path) as Label
+	var player: Node = get_node_or_null(player_path)
+	var label: Label = get_node_or_null(debt_label_path) as Label
 
-	if _player != null:
-		GameManager.bind_player(_player)
-		if _player.has_signal("turn_taken"):
-			var c := Callable(self, "_on_player_turn_taken")
-			if not _player.is_connected("turn_taken", c):
-				_player.connect("turn_taken", c)
+	if player != null:
+		GameManager.bind_player(player)
 
 	if label != null:
 		GameManager.bind_debt_label(label)
 
-	_prev_has_treasure = GameManager.has_treasure
+	# Reposition any pre-placed enemies so they don't spawn unfairly close
+	if randomize_start_enemies and player != null:
+		call_deferred("_reposition_start_enemies", player)
 
 
-func _on_player_turn_taken(_player_grid_pos: Vector2i) -> void:
-	if (not _prev_has_treasure) and GameManager.has_treasure:
-		_prev_has_treasure = true
-		_spawn_collector_once()
+func _manhattan(a: Vector2i, b: Vector2i) -> int:
+	return abs(a.x - b.x) + abs(a.y - b.y)
 
 
-func _spawn_collector_once() -> void:
-	if _collector_spawned:
-		return
-	_collector_spawned = true
-
-	var spawn_node := get_node_or_null(collector_spawn_path) as Node2D
-	var spawn_pos: Vector2 = Vector2.ZERO
-
-	if spawn_node != null:
-		spawn_pos = spawn_node.global_position
-	else:
-		# fallback: spawn near player if marker missing
-		if _player != null and _player is Node2D:
-			spawn_pos = (_player as Node2D).global_position
-
-	var collector := ENEMY_SCENE.instantiate() as Node2D
-	collector.name = "Collector"
-	collector.global_position = spawn_pos
-
-	# Try to copy settings from template enemy if it still exists (optional)
-	var template := get_node_or_null(enemy_template_path)
-	if template != null:
-		_copy_prop_if_exists(collector, template, &"map_path")
-		_copy_prop_if_exists(collector, template, &"player_path")
-		_copy_prop_if_exists(collector, template, &"camera_path")
-		_copy_prop_if_exists(collector, template, &"step_dust_scene")
-
-	add_child(collector)
-
-	_show_toast_delayed("DetKing: \"Collectors, clock in.\"", collector_toast_delay, collector_toast_duration)
-
-
-func _has_prop(obj: Object, prop: StringName) -> bool:
-	for p in obj.get_property_list():
-		if p.name == prop:
-			return true
-	return false
-
-
-func _copy_prop_if_exists(dst: Object, src: Object, prop: StringName) -> void:
-	if dst == null or src == null:
-		return
-	if _has_prop(dst, prop) and _has_prop(src, prop):
-		dst.set(prop, src.get(prop))
-
-
-func _show_toast_delayed(text: String, delay_sec: float, duration_sec: float) -> void:
-	if _toast_label == null:
+func _reposition_start_enemies(player: Node) -> void:
+	var tree := get_tree()
+	if tree == null:
 		return
 
-	_toast_token += 1
-	var my_token := _toast_token
-	_call_later(text, delay_sec, duration_sec, my_token)
-
-
-func _call_later(text: String, delay_sec: float, duration_sec: float, token: int) -> void:
-	await get_tree().create_timer(delay_sec).timeout
-	if token != _toast_token:
+	# Require player helper methods from patched player.gd
+	if not player.has_method("get_grid_pos"):
 		return
-	if _toast_label == null:
+	if not player.has_method("get_walkable_floor_candidates"):
 		return
 
-	_toast_label.text = text
+	var player_pos: Vector2i = player.get_grid_pos()
 
-	await get_tree().create_timer(duration_sec).timeout
-	if token != _toast_token:
-		return
-	if _toast_label == null:
+	var exit_pos: Vector2i = Vector2i(999999, 999999)
+	if player.has_method("get_run_exit_pos"):
+		exit_pos = player.get_run_exit_pos()
+
+	var treasure_pos: Vector2i = Vector2i(999999, 999999)
+	if player.has_method("get_run_treasure_pos"):
+		treasure_pos = player.get_run_treasure_pos()
+
+	# Candidates from player (already excludes blocked/hazard/door/exit/treasure/landmark and the player tile)
+	var candidates: Array[Vector2i] = player.get_walkable_floor_candidates(true)
+	if candidates.is_empty():
 		return
 
-	if _toast_label.text == text:
-		_toast_label.text = ""
+	var enemies: Array = tree.get_nodes_in_group("enemies")
+	if enemies.is_empty():
+		return
+
+	var used: Dictionary = {} # Vector2i -> bool
+
+	for e in enemies:
+		if e == null or not is_instance_valid(e):
+			continue
+
+		# We only reposition enemies that support set_grid_pos (patched enemy.gd includes it)
+		if not e.has_method("set_grid_pos"):
+			continue
+
+		# Build legal list for THIS enemy
+		var legal: Array[Vector2i] = []
+		for c in candidates:
+			if used.has(c):
+				continue
+
+			var dp: int = _manhattan(c, player_pos)
+			if dp < enemy_min_dist_from_player or dp > enemy_max_dist_from_player:
+				continue
+
+			if exit_pos.x < 900000:
+				var de: int = _manhattan(c, exit_pos)
+				if de < enemy_min_dist_from_exit or de > enemy_max_dist_from_exit:
+					continue
+
+			if treasure_pos.x < 900000:
+				var dt: int = _manhattan(c, treasure_pos)
+				if dt < enemy_min_dist_from_treasure or dt > enemy_max_dist_from_treasure:
+					continue
+
+			legal.append(c)
+
+		var pick: Vector2i = Vector2i(999999, 999999)
+
+		if not legal.is_empty():
+			pick = legal[randi() % legal.size()]
+		else:
+			# Fallback: at least satisfy min distance from player
+			var fallback: Array[Vector2i] = []
+			for c2 in candidates:
+				if used.has(c2):
+					continue
+				var dp2: int = _manhattan(c2, player_pos)
+				if dp2 >= enemy_min_dist_from_player:
+					fallback.append(c2)
+
+			if not fallback.is_empty():
+				pick = fallback[randi() % fallback.size()]
+			else:
+				pick = candidates[randi() % candidates.size()]
+
+		used[pick] = true
+		e.set_grid_pos(pick)

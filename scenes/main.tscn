@@ -97,6 +97,8 @@ shader_parameter/glitch_strength = 0.55
 [node name="Main" type="Node2D" unique_id=1252642730]
 y_sort_enabled = true
 script = ExtResource("1_tipki")
+player_path = NodePath("Player")
+debt_label_path = NodePath("Hud/DebtLabel")
 
 [node name="BackGround" type="ColorRect" parent="." unique_id=1274117198]
 offset_left = -634.0
