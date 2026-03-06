@@ -85,6 +85,11 @@ func generate(map: TileMapLayer, w: int, h: int, seed_in: int) -> bool:
 		push_warning("MapGenerator: couldn't find an 'exit' tile template. Player expects one.")
 		return false
 
+	var treasure_tmpl: Dictionary = _find_first_custom_tile_template(map, treasure_custom_key)
+	if treasure_tmpl.is_empty():
+		push_warning("MapGenerator: couldn't find a 'treasure' tile template. Player expects one.")
+		return false
+
 	var landmark_tmps: Array[Dictionary] = _find_all_custom_tile_templates(map, landmark_custom_key)
 
 	# Decide origin
@@ -114,13 +119,42 @@ func generate(map: TileMapLayer, w: int, h: int, seed_in: int) -> bool:
 		if _all_floors_connected(blocked, w, h):
 			_paint_map(map, origin, blocked, w, h, wall_tmpl)
 
-			# Put required templates back so Player.gd can randomize exit/landmark/treasure
-			_place_template_tile(map, origin + Vector2i(1, 1), exit_tmpl)
+			var floor_cells: Array[Vector2i] = _collect_floor_cells(blocked, origin, w, h)
+			if floor_cells.is_empty():
+				continue
+
+			var size_score: int = w + h
+			var min_t: int = clampi(int(float(size_score) / 4.0), 4, 10)
+			var min_e: int = clampi(int(float(size_score) / 5.0), 4, 8)
+
+			var spawn_cell: Vector2i = _pick_spawn_cell(floor_cells, origin, w, h)
+			if spawn_cell.x > 900000:
+				continue
+
+			var used: Dictionary = {}
+			used[spawn_cell] = true
+
+			var treasure_anchors: Array[Vector2i] = [spawn_cell]
+			var treasure_mins: Array[int] = [min_t]
+			var treasure_cell: Vector2i = _pick_best_weighted_cell(floor_cells, used, treasure_anchors, treasure_mins)
+			if treasure_cell.x > 900000:
+				continue
+			used[treasure_cell] = true
+
+			var exit_anchors: Array[Vector2i] = [spawn_cell, treasure_cell]
+			var exit_mins: Array[int] = [min_e, min_e]
+			var exit_cell: Vector2i = _pick_best_weighted_cell(floor_cells, used, exit_anchors, exit_mins)
+			if exit_cell.x > 900000:
+				continue
+			used[exit_cell] = true
+
+			_place_template_tile(map, treasure_cell, treasure_tmpl)
+			_place_template_tile(map, exit_cell, exit_tmpl)
 
 			if not landmark_tmps.is_empty():
-				_place_landmark_templates(map, origin, w, h, landmark_tmps)
+				_place_landmark_templates(map, floor_cells, landmark_tmps, spawn_cell, used, min_t)
 
-			_force_player_spawn_inside(map, origin, w, h)
+			_force_player_spawn_to_cell(map, spawn_cell)
 
 			return true
 
@@ -253,19 +287,88 @@ func _reachable_not_blocked(map: TileMapLayer, start: Vector2i, goal: Vector2i, 
 	return false
 
 # ----------------------------
-# Player spawn fix
+# Player spawn + landmark helpers
 # ----------------------------
-func _force_player_spawn_inside(map: TileMapLayer, origin: Vector2i, w: int, h: int) -> void:
+func _force_player_spawn_to_cell(map: TileMapLayer, spawn_cell: Vector2i) -> void:
 	var player: Node2D = get_node_or_null(player_path) as Node2D
 	if player == null:
 		return
 
-	var sx: int = clampi(int(float(w) / 2.0), 1, w - 2)
-	var sy: int = clampi(int(float(h) / 2.0), 1, h - 2)
-	var spawn_cell: Vector2i = origin + Vector2i(sx, sy)
-
 	player.global_position = map.to_global(map.map_to_local(spawn_cell))
 	player.set("grid_pos", spawn_cell)
+
+func _manhattan(a: Vector2i, b: Vector2i) -> int:
+	return absi(a.x - b.x) + absi(a.y - b.y)
+
+func _collect_floor_cells(blocked: Array[PackedByteArray], origin: Vector2i, w: int, h: int) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+
+	for y: int in range(1, h - 1):
+		for x: int in range(1, w - 1):
+			if blocked[y][x] == 0:
+				out.append(origin + Vector2i(x, y))
+
+	return out
+
+func _pick_spawn_cell(floor_cells: Array[Vector2i], origin: Vector2i, w: int, h: int) -> Vector2i:
+	if floor_cells.is_empty():
+		return Vector2i(999999, 999999)
+
+	var center_cell: Vector2i = origin + Vector2i(
+		clampi(int(float(w) / 2.0), 1, w - 2),
+		clampi(int(float(h) / 2.0), 1, h - 2)
+	)
+
+	var best_cell: Vector2i = floor_cells[0]
+	var best_score: int = 999999
+
+	for cell: Vector2i in floor_cells:
+		var score: int = _manhattan(cell, center_cell)
+		if score < best_score:
+			best_score = score
+			best_cell = cell
+
+	return best_cell
+
+func _pick_best_weighted_cell(
+	candidates: Array[Vector2i],
+	forbidden: Dictionary,
+	anchors: Array[Vector2i],
+	min_dists: Array[int]
+) -> Vector2i:
+	if candidates.is_empty():
+		return Vector2i(999999, 999999)
+
+	for pass_idx: int in range(2):
+		var best_cell: Vector2i = Vector2i(999999, 999999)
+		var best_score: int = -999999
+
+		for cell: Vector2i in candidates:
+			if forbidden.has(cell):
+				continue
+
+			var ok: bool = true
+			var score: int = 0
+
+			for i: int in range(anchors.size()):
+				var dist: int = _manhattan(cell, anchors[i])
+				score += dist
+
+				if pass_idx == 0 and i < min_dists.size() and dist < min_dists[i]:
+					ok = false
+					break
+
+			if not ok:
+				continue
+
+			if score > best_score:
+				best_score = score
+				best_cell = cell
+
+		if best_cell.x <= 900000:
+			return best_cell
+
+	return Vector2i(999999, 999999)
 
 # ----------------------------
 # Blocked grid + connectivity
@@ -420,61 +523,27 @@ func _find_all_custom_tile_templates(map: TileMapLayer, key: StringName) -> Arra
 func _place_template_tile(map: TileMapLayer, cell: Vector2i, tmpl: Dictionary) -> void:
 	map.set_cell(cell, int(tmpl["sid"]), tmpl["ac"], int(tmpl["alt"]))
 
-func _place_landmark_templates(map: TileMapLayer, origin: Vector2i, w: int, h: int, tmps: Array[Dictionary]) -> void:
-	var candidates: Array[Vector2i] = []
-
-	var player_spawn: Vector2i = origin + Vector2i(
-		clampi(int(float(w) / 2.0), 1, w - 2),
-		clampi(int(float(h) / 2.0), 1, h - 2)
-	)
-
-	var exit_cell: Vector2i = origin + Vector2i(1, 1)
-
-	for y: int in range(1, h - 1):
-		for x: int in range(1, w - 1):
-			var cell: Vector2i = origin + Vector2i(x, y)
-
-			if cell == player_spawn:
-				continue
-			if cell == exit_cell:
-				continue
-
-			var td: TileData = map.get_cell_tile_data(cell)
-			if td == null:
-				continue
-			if bool(td.get_custom_data(blocked_custom_key)):
-				continue
-
-			var dist_from_player: int = absi(cell.x - player_spawn.x) + absi(cell.y - player_spawn.y)
-			if dist_from_player < 3:
-				continue
-
-			candidates.append(cell)
-
-	if candidates.is_empty():
+func _place_landmark_templates(
+	map: TileMapLayer,
+	floor_cells: Array[Vector2i],
+	tmps: Array[Dictionary],
+	player_spawn: Vector2i,
+	used: Dictionary,
+	min_dist_from_player: int
+) -> void:
+	if floor_cells.is_empty():
 		push_warning("MapGenerator: no valid landmark cells found.")
 		return
 
 	var placed_cells: Array[Vector2i] = []
-	var used: Dictionary = {}
 
 	for tmpl: Dictionary in tmps:
-		var best_cell: Vector2i = Vector2i(999999, 999999)
-		var best_score: int = -999999
+		var anchors: Array[Vector2i] = [player_spawn]
+		for other: Vector2i in placed_cells:
+			anchors.append(other)
 
-		for cell: Vector2i in candidates:
-			if used.has(cell):
-				continue
-
-			var score: int = 0
-			score += absi(cell.x - player_spawn.x) + absi(cell.y - player_spawn.y)
-
-			for other: Vector2i in placed_cells:
-				score += absi(cell.x - other.x) + absi(cell.y - other.y)
-
-			if score > best_score:
-				best_score = score
-				best_cell = cell
+		var mins: Array[int] = [min_dist_from_player]
+		var best_cell: Vector2i = _pick_best_weighted_cell(floor_cells, used, anchors, mins)
 
 		if best_cell.x > 900000:
 			break
