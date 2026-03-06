@@ -43,6 +43,10 @@ var last_seed_used: int = 0
 var _last_origin: Vector2i = Vector2i.ZERO
 var _last_w: int = 0
 var _last_h: int = 0
+var _last_spawn_cell: Vector2i = Vector2i(999999, 999999)
+var _last_treasure_cell: Vector2i = Vector2i(999999, 999999)
+var _last_exit_cell: Vector2i = Vector2i(999999, 999999)
+var _last_clue_landmark_cell: Vector2i = Vector2i(999999, 999999)
 
 func _ready() -> void:
 	var map: TileMapLayer = get_node_or_null(map_path) as TileMapLayer
@@ -126,6 +130,8 @@ func generate(map: TileMapLayer, w: int, h: int, seed_in: int) -> bool:
 			var size_score: int = w + h
 			var min_t: int = clampi(int(float(size_score) / 4.0), 4, 10)
 			var min_e: int = clampi(int(float(size_score) / 5.0), 4, 8)
+			var clue_max_dist: int = clampi(int(float(mini(w, h)) / 2.0), 3, 8)
+			var clue_min_dist: int = mini(2, clue_max_dist)
 
 			var spawn_cell: Vector2i = _pick_spawn_cell(floor_cells, origin, w, h)
 			if spawn_cell.x > 900000:
@@ -151,9 +157,37 @@ func generate(map: TileMapLayer, w: int, h: int, seed_in: int) -> bool:
 			_place_template_tile(map, treasure_cell, treasure_tmpl)
 			_place_template_tile(map, exit_cell, exit_tmpl)
 
-			if not landmark_tmps.is_empty():
-				_place_landmark_templates(map, floor_cells, landmark_tmps, spawn_cell, used, min_t)
+			var clue_landmark_cell: Vector2i = Vector2i(999999, 999999)
+			var seeded_landmark_cells: Array[Vector2i] = []
 
+			if not landmark_tmps.is_empty():
+				clue_landmark_cell = _pick_clue_landmark_cell(
+					floor_cells,
+					used,
+					treasure_cell,
+					spawn_cell,
+					min_t,
+					clue_min_dist,
+					clue_max_dist,
+					force_axis_aligned_landmark_clue
+				)
+
+				if clue_landmark_cell.x <= 900000:
+					_place_template_tile(map, clue_landmark_cell, landmark_tmps[0])
+					used[clue_landmark_cell] = true
+					seeded_landmark_cells.append(clue_landmark_cell)
+				else:
+					push_warning("MapGenerator: couldn't place a preferred clue landmark near treasure. Falling back to normal landmark spread.")
+
+				if landmark_tmps.size() > 1:
+					var remaining_landmark_tmps: Array[Dictionary] = []
+					for i: int in range(1, landmark_tmps.size()):
+						remaining_landmark_tmps.append(landmark_tmps[i])
+
+					if not remaining_landmark_tmps.is_empty():
+						_place_landmark_templates(map, floor_cells, remaining_landmark_tmps, spawn_cell, used, min_t, seeded_landmark_cells)
+
+			_store_procgen_cells(spawn_cell, treasure_cell, exit_cell, clue_landmark_cell)
 			_force_player_spawn_to_cell(map, spawn_cell)
 
 			return true
@@ -370,6 +404,87 @@ func _pick_best_weighted_cell(
 
 	return Vector2i(999999, 999999)
 
+func _pick_clue_landmark_cell(
+	candidates: Array[Vector2i],
+	forbidden: Dictionary,
+	treasure_cell: Vector2i,
+	player_spawn: Vector2i,
+	min_dist_from_player: int,
+	min_dist_from_treasure: int,
+	max_dist_from_treasure: int,
+	require_axis_aligned: bool
+) -> Vector2i:
+	if candidates.is_empty():
+		return Vector2i(999999, 999999)
+
+	var target_dist: int = clampi(int(float(min_dist_from_treasure + max_dist_from_treasure) / 2.0), min_dist_from_treasure, max_dist_from_treasure)
+
+	for pass_idx: int in range(4):
+		var best_cell: Vector2i = Vector2i(999999, 999999)
+		var best_score: int = -999999
+
+		for cell: Vector2i in candidates:
+			if forbidden.has(cell):
+				continue
+
+			var dist_player: int = _manhattan(cell, player_spawn)
+			if dist_player < min_dist_from_player:
+				continue
+
+			var dist_treasure: int = _manhattan(cell, treasure_cell)
+			var axis_aligned: bool = (cell.x == treasure_cell.x or cell.y == treasure_cell.y)
+
+			var allow_axis: bool = true
+			var allow_range: bool = true
+
+			match pass_idx:
+				0:
+					allow_axis = (not require_axis_aligned) or axis_aligned
+					allow_range = dist_treasure >= min_dist_from_treasure and dist_treasure <= max_dist_from_treasure
+				1:
+					allow_axis = true
+					allow_range = dist_treasure >= min_dist_from_treasure and dist_treasure <= max_dist_from_treasure
+				2:
+					allow_axis = (not require_axis_aligned) or axis_aligned
+					allow_range = dist_treasure >= min_dist_from_treasure
+				_:
+					allow_axis = true
+					allow_range = true
+
+			if not allow_axis or not allow_range:
+				continue
+
+			var score: int = 0
+			if axis_aligned:
+				score += 200
+			score += dist_player * 6
+			score -= absi(dist_treasure - target_dist) * 10
+
+			if score > best_score:
+				best_score = score
+				best_cell = cell
+
+		if best_cell.x <= 900000:
+			return best_cell
+
+	return Vector2i(999999, 999999)
+
+func _store_procgen_cells(spawn_cell: Vector2i, treasure_cell: Vector2i, exit_cell: Vector2i, clue_landmark_cell: Vector2i) -> void:
+	_last_spawn_cell = spawn_cell
+	_last_treasure_cell = treasure_cell
+	_last_exit_cell = exit_cell
+	_last_clue_landmark_cell = clue_landmark_cell
+
+	var player: Node = get_node_or_null(player_path)
+	if player == null:
+		return
+
+	player.set("procgen_spawn_cell", spawn_cell)
+	player.set("procgen_treasure_cell", treasure_cell)
+	player.set("procgen_exit_cell", exit_cell)
+	player.set("procgen_clue_landmark_cell", clue_landmark_cell)
+	player.set("procgen_has_clue_landmark", clue_landmark_cell.x <= 900000)
+
 # ----------------------------
 # Blocked grid + connectivity
 # ----------------------------
@@ -529,13 +644,16 @@ func _place_landmark_templates(
 	tmps: Array[Dictionary],
 	player_spawn: Vector2i,
 	used: Dictionary,
-	min_dist_from_player: int
+	min_dist_from_player: int,
+	seeded_cells: Array[Vector2i]
 ) -> void:
 	if floor_cells.is_empty():
 		push_warning("MapGenerator: no valid landmark cells found.")
 		return
 
 	var placed_cells: Array[Vector2i] = []
+	for seeded: Vector2i in seeded_cells:
+		placed_cells.append(seeded)
 
 	for tmpl: Dictionary in tmps:
 		var anchors: Array[Vector2i] = [player_spawn]
