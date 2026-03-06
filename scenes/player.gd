@@ -82,6 +82,9 @@ signal turn_taken(player_grid_pos: Vector2i)
 # NEW: clue readability preference
 @export var landmark_axis_aligned_chance_percent: int = 60
 
+# Procgen source of truth
+@export var procgen_use_mapgenerator_results: bool = true
+
 # Exit -> Settlement
 @export var exit_custom_key: StringName = &"exit"
 @export var settlement_scene: PackedScene
@@ -142,6 +145,13 @@ var _run_treasure_pos: Vector2i = Vector2i(999999, 999999)
 var _run_landmark_pos: Vector2i = Vector2i(999999, 999999)
 var _run_landmark_name: String = ""
 
+# Procgen cells written by MapGenerator.gd
+var procgen_spawn_cell: Vector2i = Vector2i(999999, 999999)
+var procgen_treasure_cell: Vector2i = Vector2i(999999, 999999)
+var procgen_exit_cell: Vector2i = Vector2i(999999, 999999)
+var procgen_clue_landmark_cell: Vector2i = Vector2i(999999, 999999)
+var procgen_has_clue_landmark: bool = false
+
 # Toast
 var _toast_label: Label
 var _toast_token: int = 0
@@ -175,12 +185,27 @@ func _ready() -> void:
 	_apply_loadout_from_shop()
 	_apply_player_palette_if_needed()
 
-	# Snap player to grid
+	# Snap player to grid as a safe fallback before procgen handoff.
 	var local_pos: Vector2 = map.to_local(global_position)
 	grid_pos = map.local_to_map(local_pos + Vector2(float(tile_size) * 0.5, float(tile_size) * 0.5))
 	global_position = map.to_global(map.map_to_local(grid_pos))
 
-	# Randomize exit BEFORE caching exits for blink
+	# Preferred path: MapGenerator already chose spawn / treasure / exit / clue landmark.
+	if _apply_procgen_source_of_truth():
+		_cache_exit_tiles()
+
+		if run_start_clue_enabled and _run_treasure_pos.x < 900000:
+			if _run_landmark_pos.x < 900000 and _run_landmark_name != "":
+				_show_landmark_direction_clue()
+			else:
+				_show_run_start_clue(_run_treasure_pos)
+
+		_cache_and_hide_treasures()
+		_reveal_treasures_near(grid_pos, treasure_reveal_radius)
+		queue_redraw()
+		return
+
+	# Legacy fallback: older scenes can still randomize from Player if procgen data is absent.
 	var exit_tmpl: Dictionary = {}
 	if randomize_exit_each_run:
 		exit_tmpl = _get_exit_template()
@@ -189,7 +214,6 @@ func _ready() -> void:
 
 	_cache_exit_tiles()
 
-	# Place landmark (uses any pre-placed landmark tile as template)
 	if landmark_enabled:
 		var types: Array[Dictionary] = _collect_landmark_types_from_map_and_clear()
 		if types.size() > 0:
@@ -198,16 +222,13 @@ func _ready() -> void:
 				_run_landmark_pos = result["pos"]
 				_run_landmark_name = String(result["name"])
 
-	# Place treasure (prefer near landmark)
 	if randomize_treasure_each_run:
 		_run_treasure_pos = _place_random_treasure_tile()
 
-	# Ensure the exit isn't camping the treasure (exit is placed before treasure)
 	if randomize_exit_each_run and not exit_tmpl.is_empty():
 		_ensure_exit_far_from_treasure(exit_tmpl)
 		_cache_exit_tiles()
 
-	# Show clue
 	if run_start_clue_enabled and _run_treasure_pos.x < 900000:
 		if _run_landmark_pos.x < 900000 and _run_landmark_name != "":
 			_show_landmark_direction_clue()
@@ -298,6 +319,56 @@ func _dir_x(dx: int) -> String:
 
 func _dir_y(dy: int) -> String:
 	return "SOUTH" if dy > 0 else "NORTH"
+
+func _is_valid_procgen_cell(cell: Vector2i) -> bool:
+	return cell.x <= 900000 and cell.y <= 900000
+
+
+func _get_landmark_name_at_cell(cell: Vector2i) -> String:
+	if map == null:
+		return "Landmark"
+
+	var td: TileData = map.get_cell_tile_data(cell)
+	if td == null:
+		return "Landmark"
+
+	var name_val: Variant = td.get_custom_data(landmark_name_custom_key)
+	if typeof(name_val) == TYPE_STRING:
+		var nm: String = String(name_val)
+		if nm != "":
+			return nm
+
+	return "Landmark"
+
+
+func _apply_procgen_source_of_truth() -> bool:
+	if not procgen_use_mapgenerator_results:
+		return false
+
+	var have_spawn: bool = _is_valid_procgen_cell(procgen_spawn_cell)
+	var have_treasure: bool = _is_valid_procgen_cell(procgen_treasure_cell)
+	var have_exit: bool = _is_valid_procgen_cell(procgen_exit_cell)
+
+	if not have_spawn or not have_treasure or not have_exit:
+		return false
+
+	grid_pos = procgen_spawn_cell
+	global_position = map.to_global(map.map_to_local(grid_pos))
+
+	_run_treasure_pos = procgen_treasure_cell
+	_run_exit_pos = procgen_exit_cell
+
+	if procgen_has_clue_landmark or _is_valid_procgen_cell(procgen_clue_landmark_cell):
+		procgen_has_clue_landmark = _is_valid_procgen_cell(procgen_clue_landmark_cell)
+
+	if procgen_has_clue_landmark:
+		_run_landmark_pos = procgen_clue_landmark_cell
+		_run_landmark_name = _get_landmark_name_at_cell(procgen_clue_landmark_cell)
+	else:
+		_run_landmark_pos = Vector2i(999999, 999999)
+		_run_landmark_name = ""
+
+	return true
 
 func _show_landmark_direction_clue() -> void:
 	if _run_landmark_pos.x > 900000 or _run_treasure_pos.x > 900000:

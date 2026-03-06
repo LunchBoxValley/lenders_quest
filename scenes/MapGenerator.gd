@@ -37,6 +37,12 @@ class_name MapGenerator
 
 # --- Seed (0 = random every time) ---
 @export var map_seed: int = 0
+@export var placement_top_pool_size: int = 4
+@export var minimum_layout_score: int = 140
+@export var minimum_layout_quadrants: int = 3
+@export var require_treasure_exit_different_quadrants: bool = true
+@export var require_key_cells_span_multiple_quadrants: bool = true
+@export var debug_print_layout_scores: bool = false
 var last_seed_used: int = 0
 
 # Remember last room rectangle (for debug checks)
@@ -133,7 +139,7 @@ func generate(map: TileMapLayer, w: int, h: int, seed_in: int) -> bool:
 			var clue_max_dist: int = clampi(int(float(mini(w, h)) / 2.0), 3, 8)
 			var clue_min_dist: int = mini(2, clue_max_dist)
 
-			var spawn_cell: Vector2i = _pick_spawn_cell(floor_cells, origin, w, h)
+			var spawn_cell: Vector2i = _pick_spawn_cell(floor_cells, origin, w, h, rng)
 			if spawn_cell.x > 900000:
 				continue
 
@@ -142,20 +148,17 @@ func generate(map: TileMapLayer, w: int, h: int, seed_in: int) -> bool:
 
 			var treasure_anchors: Array[Vector2i] = [spawn_cell]
 			var treasure_mins: Array[int] = [min_t]
-			var treasure_cell: Vector2i = _pick_best_weighted_cell(floor_cells, used, treasure_anchors, treasure_mins)
+			var treasure_cell: Vector2i = _pick_best_weighted_cell(floor_cells, used, treasure_anchors, treasure_mins, rng)
 			if treasure_cell.x > 900000:
 				continue
 			used[treasure_cell] = true
 
 			var exit_anchors: Array[Vector2i] = [spawn_cell, treasure_cell]
 			var exit_mins: Array[int] = [min_e, min_e]
-			var exit_cell: Vector2i = _pick_best_weighted_cell(floor_cells, used, exit_anchors, exit_mins)
+			var exit_cell: Vector2i = _pick_best_weighted_cell(floor_cells, used, exit_anchors, exit_mins, rng)
 			if exit_cell.x > 900000:
 				continue
 			used[exit_cell] = true
-
-			_place_template_tile(map, treasure_cell, treasure_tmpl)
-			_place_template_tile(map, exit_cell, exit_tmpl)
 
 			var clue_landmark_cell: Vector2i = Vector2i(999999, 999999)
 			var seeded_landmark_cells: Array[Vector2i] = []
@@ -169,23 +172,32 @@ func generate(map: TileMapLayer, w: int, h: int, seed_in: int) -> bool:
 					min_t,
 					clue_min_dist,
 					clue_max_dist,
-					force_axis_aligned_landmark_clue
+					force_axis_aligned_landmark_clue,
+					rng
 				)
 
 				if clue_landmark_cell.x <= 900000:
-					_place_template_tile(map, clue_landmark_cell, landmark_tmps[0])
 					used[clue_landmark_cell] = true
 					seeded_landmark_cells.append(clue_landmark_cell)
 				else:
 					push_warning("MapGenerator: couldn't place a preferred clue landmark near treasure. Falling back to normal landmark spread.")
 
-				if landmark_tmps.size() > 1:
-					var remaining_landmark_tmps: Array[Dictionary] = []
-					for i: int in range(1, landmark_tmps.size()):
-						remaining_landmark_tmps.append(landmark_tmps[i])
+			if not _layout_is_good(origin, w, h, spawn_cell, treasure_cell, exit_cell, clue_landmark_cell):
+				continue
 
-					if not remaining_landmark_tmps.is_empty():
-						_place_landmark_templates(map, floor_cells, remaining_landmark_tmps, spawn_cell, used, min_t, seeded_landmark_cells)
+			_place_template_tile(map, treasure_cell, treasure_tmpl)
+			_place_template_tile(map, exit_cell, exit_tmpl)
+
+			if clue_landmark_cell.x <= 900000:
+				_place_template_tile(map, clue_landmark_cell, landmark_tmps[0])
+
+			if landmark_tmps.size() > 1:
+				var remaining_landmark_tmps: Array[Dictionary] = []
+				for i: int in range(1, landmark_tmps.size()):
+					remaining_landmark_tmps.append(landmark_tmps[i])
+
+				if not remaining_landmark_tmps.is_empty():
+					_place_landmark_templates(map, floor_cells, remaining_landmark_tmps, spawn_cell, used, min_t, seeded_landmark_cells, rng)
 
 			_store_procgen_cells(spawn_cell, treasure_cell, exit_cell, clue_landmark_cell)
 			_force_player_spawn_to_cell(map, spawn_cell)
@@ -344,7 +356,7 @@ func _collect_floor_cells(blocked: Array[PackedByteArray], origin: Vector2i, w: 
 
 	return out
 
-func _pick_spawn_cell(floor_cells: Array[Vector2i], origin: Vector2i, w: int, h: int) -> Vector2i:
+func _pick_spawn_cell(floor_cells: Array[Vector2i], origin: Vector2i, w: int, h: int, rng: RandomNumberGenerator) -> Vector2i:
 	if floor_cells.is_empty():
 		return Vector2i(999999, 999999)
 
@@ -353,29 +365,25 @@ func _pick_spawn_cell(floor_cells: Array[Vector2i], origin: Vector2i, w: int, h:
 		clampi(int(float(h) / 2.0), 1, h - 2)
 	)
 
-	var best_cell: Vector2i = floor_cells[0]
-	var best_score: int = 999999
-
+	var scored: Array[Dictionary] = []
 	for cell: Vector2i in floor_cells:
 		var score: int = _manhattan(cell, center_cell)
-		if score < best_score:
-			best_score = score
-			best_cell = cell
+		scored.append({"cell": cell, "score": score})
 
-	return best_cell
+	return _pick_from_scored_pool(scored, rng, true)
 
 func _pick_best_weighted_cell(
 	candidates: Array[Vector2i],
 	forbidden: Dictionary,
 	anchors: Array[Vector2i],
-	min_dists: Array[int]
+	min_dists: Array[int],
+	rng: RandomNumberGenerator
 ) -> Vector2i:
 	if candidates.is_empty():
 		return Vector2i(999999, 999999)
 
 	for pass_idx: int in range(2):
-		var best_cell: Vector2i = Vector2i(999999, 999999)
-		var best_score: int = -999999
+		var scored: Array[Dictionary] = []
 
 		for cell: Vector2i in candidates:
 			if forbidden.has(cell):
@@ -395,14 +403,128 @@ func _pick_best_weighted_cell(
 			if not ok:
 				continue
 
-			if score > best_score:
-				best_score = score
-				best_cell = cell
+			scored.append({"cell": cell, "score": score})
 
-		if best_cell.x <= 900000:
-			return best_cell
+		var picked: Vector2i = _pick_from_scored_pool(scored, rng, false)
+		if picked.x <= 900000:
+			return picked
 
 	return Vector2i(999999, 999999)
+
+func _layout_is_good(
+	origin: Vector2i,
+	w: int,
+	h: int,
+	spawn_cell: Vector2i,
+	treasure_cell: Vector2i,
+	exit_cell: Vector2i,
+	clue_landmark_cell: Vector2i
+) -> bool:
+	var quadrant_count: int = _count_layout_quadrants(origin, w, h, spawn_cell, treasure_cell, exit_cell, clue_landmark_cell)
+	if require_treasure_exit_different_quadrants:
+		if _cell_quadrant(origin, w, h, treasure_cell) == _cell_quadrant(origin, w, h, exit_cell):
+			return false
+
+	if require_key_cells_span_multiple_quadrants and quadrant_count < minimum_layout_quadrants:
+		return false
+
+	var score: int = _score_layout(origin, w, h, spawn_cell, treasure_cell, exit_cell, clue_landmark_cell, quadrant_count)
+	if debug_print_layout_scores:
+		print(
+			"MapGenerator layout score=",
+			score,
+			" quadrants=",
+			quadrant_count,
+			" spawn=",
+			spawn_cell,
+			" treasure=",
+			treasure_cell,
+			" exit=",
+			exit_cell,
+			" clue=",
+			clue_landmark_cell
+		)
+
+	return score >= minimum_layout_score
+
+func _score_layout(
+	origin: Vector2i,
+	w: int,
+	h: int,
+	spawn_cell: Vector2i,
+	treasure_cell: Vector2i,
+	exit_cell: Vector2i,
+	clue_landmark_cell: Vector2i,
+	quadrant_count: int
+) -> int:
+	var spawn_to_treasure: int = _manhattan(spawn_cell, treasure_cell)
+	var spawn_to_exit: int = _manhattan(spawn_cell, exit_cell)
+	var treasure_to_exit: int = _manhattan(treasure_cell, exit_cell)
+
+	var score: int = 0
+	score += spawn_to_treasure * 4
+	score += spawn_to_exit * 2
+	score += treasure_to_exit * 5
+	score += quadrant_count * 18
+	score += _half_spread_bonus(origin, w, h, spawn_cell, treasure_cell)
+	score += _half_spread_bonus(origin, w, h, spawn_cell, exit_cell)
+	score += _half_spread_bonus(origin, w, h, treasure_cell, exit_cell)
+
+	if clue_landmark_cell.x <= 900000:
+		var clue_to_treasure: int = _manhattan(clue_landmark_cell, treasure_cell)
+		score += 10
+		if clue_landmark_cell.x == treasure_cell.x or clue_landmark_cell.y == treasure_cell.y:
+			score += 20
+		score += clampi(12 - absi(clue_to_treasure - 3), 0, 12) * 3
+		score += clampi(_manhattan(spawn_cell, clue_landmark_cell), 0, 12)
+
+	return score
+
+func _count_layout_quadrants(
+	origin: Vector2i,
+	w: int,
+	h: int,
+	spawn_cell: Vector2i,
+	treasure_cell: Vector2i,
+	exit_cell: Vector2i,
+	clue_landmark_cell: Vector2i
+) -> int:
+	var seen: Dictionary = {}
+	seen[_cell_quadrant(origin, w, h, spawn_cell)] = true
+	seen[_cell_quadrant(origin, w, h, treasure_cell)] = true
+	seen[_cell_quadrant(origin, w, h, exit_cell)] = true
+	if clue_landmark_cell.x <= 900000:
+		seen[_cell_quadrant(origin, w, h, clue_landmark_cell)] = true
+	return seen.size()
+
+func _cell_quadrant(origin: Vector2i, w: int, h: int, cell: Vector2i) -> int:
+	var local: Vector2i = cell - origin
+	var left_half: bool = local.x < int(float(w) / 2.0)
+	var top_half: bool = local.y < int(float(h) / 2.0)
+
+	if top_half:
+		return 0 if left_half else 1
+	return 2 if left_half else 3
+
+func _cells_share_horizontal_half(origin: Vector2i, w: int, cell_a: Vector2i, cell_b: Vector2i) -> bool:
+	var split_x: int = int(float(w) / 2.0)
+	var a_left: bool = (cell_a - origin).x < split_x
+	var b_left: bool = (cell_b - origin).x < split_x
+	return a_left == b_left
+
+func _cells_share_vertical_half(origin: Vector2i, h: int, cell_a: Vector2i, cell_b: Vector2i) -> bool:
+	var split_y: int = int(float(h) / 2.0)
+	var a_top: bool = (cell_a - origin).y < split_y
+	var b_top: bool = (cell_b - origin).y < split_y
+	return a_top == b_top
+
+func _half_spread_bonus(origin: Vector2i, w: int, h: int, cell_a: Vector2i, cell_b: Vector2i) -> int:
+	var bonus: int = 0
+	if not _cells_share_horizontal_half(origin, w, cell_a, cell_b):
+		bonus += 16
+	if not _cells_share_vertical_half(origin, h, cell_a, cell_b):
+		bonus += 16
+	return bonus
 
 func _pick_clue_landmark_cell(
 	candidates: Array[Vector2i],
@@ -412,7 +534,8 @@ func _pick_clue_landmark_cell(
 	min_dist_from_player: int,
 	min_dist_from_treasure: int,
 	max_dist_from_treasure: int,
-	require_axis_aligned: bool
+	require_axis_aligned: bool,
+	rng: RandomNumberGenerator
 ) -> Vector2i:
 	if candidates.is_empty():
 		return Vector2i(999999, 999999)
@@ -420,8 +543,7 @@ func _pick_clue_landmark_cell(
 	var target_dist: int = clampi(int(float(min_dist_from_treasure + max_dist_from_treasure) / 2.0), min_dist_from_treasure, max_dist_from_treasure)
 
 	for pass_idx: int in range(4):
-		var best_cell: Vector2i = Vector2i(999999, 999999)
-		var best_score: int = -999999
+		var scored: Array[Dictionary] = []
 
 		for cell: Vector2i in candidates:
 			if forbidden.has(cell):
@@ -459,15 +581,53 @@ func _pick_clue_landmark_cell(
 				score += 200
 			score += dist_player * 6
 			score -= absi(dist_treasure - target_dist) * 10
+			scored.append({"cell": cell, "score": score})
 
-			if score > best_score:
-				best_score = score
-				best_cell = cell
-
-		if best_cell.x <= 900000:
-			return best_cell
+		var picked: Vector2i = _pick_from_scored_pool(scored, rng, false)
+		if picked.x <= 900000:
+			return picked
 
 	return Vector2i(999999, 999999)
+
+func _sort_scored_desc(a: Dictionary, b: Dictionary) -> bool:
+	return int(a["score"]) > int(b["score"])
+
+
+func _sort_scored_asc(a: Dictionary, b: Dictionary) -> bool:
+	return int(a["score"]) < int(b["score"])
+
+
+func _pick_from_scored_pool(scored: Array[Dictionary], rng: RandomNumberGenerator, prefer_lowest: bool) -> Vector2i:
+	if scored.is_empty():
+		return Vector2i(999999, 999999)
+
+	var sorted: Array[Dictionary] = []
+	for item: Dictionary in scored:
+		sorted.append(item)
+
+	_shuffle_scored(sorted, rng)
+
+	if prefer_lowest:
+		sorted.sort_custom(Callable(self, "_sort_scored_asc"))
+	else:
+		sorted.sort_custom(Callable(self, "_sort_scored_desc"))
+
+	var pool_size: int = mini(maxi(1, placement_top_pool_size), sorted.size())
+	var chosen_idx: int = rng.randi_range(0, pool_size - 1)
+	var chosen: Variant = sorted[chosen_idx]["cell"]
+	if typeof(chosen) == TYPE_VECTOR2I:
+		return chosen as Vector2i
+
+	return Vector2i(999999, 999999)
+
+func _shuffle_scored(items: Array[Dictionary], rng: RandomNumberGenerator) -> void:
+	var i: int = items.size() - 1
+	while i > 0:
+		var j: int = rng.randi_range(0, i)
+		var temp: Dictionary = items[i]
+		items[i] = items[j]
+		items[j] = temp
+		i -= 1
 
 func _store_procgen_cells(spawn_cell: Vector2i, treasure_cell: Vector2i, exit_cell: Vector2i, clue_landmark_cell: Vector2i) -> void:
 	_last_spawn_cell = spawn_cell
@@ -645,7 +805,8 @@ func _place_landmark_templates(
 	player_spawn: Vector2i,
 	used: Dictionary,
 	min_dist_from_player: int,
-	seeded_cells: Array[Vector2i]
+	seeded_cells: Array[Vector2i],
+	rng: RandomNumberGenerator
 ) -> void:
 	if floor_cells.is_empty():
 		push_warning("MapGenerator: no valid landmark cells found.")
@@ -661,7 +822,7 @@ func _place_landmark_templates(
 			anchors.append(other)
 
 		var mins: Array[int] = [min_dist_from_player]
-		var best_cell: Vector2i = _pick_best_weighted_cell(floor_cells, used, anchors, mins)
+		var best_cell: Vector2i = _pick_best_weighted_cell(floor_cells, used, anchors, mins, rng)
 
 		if best_cell.x > 900000:
 			break
