@@ -421,13 +421,64 @@ func _place_template_tile(map: TileMapLayer, cell: Vector2i, tmpl: Dictionary) -
 	map.set_cell(cell, int(tmpl["sid"]), tmpl["ac"], int(tmpl["alt"]))
 
 func _place_landmark_templates(map: TileMapLayer, origin: Vector2i, w: int, h: int, tmps: Array[Dictionary]) -> void:
-	var spots: Array[Vector2i] = [
-		origin + Vector2i(2, 2),
-		origin + Vector2i(w - 3, 2),
-		origin + Vector2i(2, h - 3),
-		origin + Vector2i(w - 3, h - 3),
-	]
+	var candidates: Array[Vector2i] = []
 
-	var n: int = mini(spots.size(), tmps.size())
-	for i: int in range(n):
-		_place_template_tile(map, spots[i], tmps[i])
+	var player_spawn: Vector2i = origin + Vector2i(
+		clampi(int(float(w) / 2.0), 1, w - 2),
+		clampi(int(float(h) / 2.0), 1, h - 2)
+	)
+
+	var exit_cell: Vector2i = origin + Vector2i(1, 1)
+
+	for y: int in range(1, h - 1):
+		for x: int in range(1, w - 1):
+			var cell: Vector2i = origin + Vector2i(x, y)
+
+			if cell == player_spawn:
+				continue
+			if cell == exit_cell:
+				continue
+
+			var td: TileData = map.get_cell_tile_data(cell)
+			if td == null:
+				continue
+			if bool(td.get_custom_data(blocked_custom_key)):
+				continue
+
+			var dist_from_player: int = absi(cell.x - player_spawn.x) + absi(cell.y - player_spawn.y)
+			if dist_from_player < 3:
+				continue
+
+			candidates.append(cell)
+
+	if candidates.is_empty():
+		push_warning("MapGenerator: no valid landmark cells found.")
+		return
+
+	var placed_cells: Array[Vector2i] = []
+	var used: Dictionary = {}
+
+	for tmpl: Dictionary in tmps:
+		var best_cell: Vector2i = Vector2i(999999, 999999)
+		var best_score: int = -999999
+
+		for cell: Vector2i in candidates:
+			if used.has(cell):
+				continue
+
+			var score: int = 0
+			score += absi(cell.x - player_spawn.x) + absi(cell.y - player_spawn.y)
+
+			for other: Vector2i in placed_cells:
+				score += absi(cell.x - other.x) + absi(cell.y - other.y)
+
+			if score > best_score:
+				best_score = score
+				best_cell = cell
+
+		if best_cell.x > 900000:
+			break
+
+		_place_template_tile(map, best_cell, tmpl)
+		used[best_cell] = true
+		placed_cells.append(best_cell)
