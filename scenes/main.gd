@@ -20,6 +20,16 @@ extends Node
 @export var enemy_min_dist_from_treasure: int = 4
 @export var enemy_max_dist_from_treasure: int = 999
 
+@export var enemy_min_dist_from_landmark: int = 3
+@export var enemy_max_dist_from_landmark: int = 999
+
+# --- Enemy placement tuning ---
+@export var enemy_spawn_top_pool_size: int = 5
+@export var enemy_prefer_spread_bonus_per_tile: int = 7
+@export var enemy_prefer_player_band_center_bonus: int = 24
+@export var enemy_prefer_objective_buffer_bonus: int = 3
+@export var debug_print_enemy_spawn_summary: bool = false
+
 # --- Turn feel / juice ---
 @export var enemy_step_delay_sec: float = 0.03  # set to 0.3 if you want slower “click…click…click…”
 
@@ -140,6 +150,101 @@ func _manhattan(a: Vector2i, b: Vector2i) -> int:
 	return abs(a.x - b.x) + abs(a.y - b.y)
 
 
+func _is_valid_run_cell(cell: Vector2i) -> bool:
+	return cell.x <= 900000 and cell.y <= 900000
+
+
+func _buffer_score(dist: int, min_dist: int, max_dist: int) -> int:
+	if max_dist < min_dist:
+		return 0
+
+	var score: int = 0
+	var extra: int = maxi(0, dist - min_dist)
+	score += mini(extra, 6) * enemy_prefer_objective_buffer_bonus
+
+	if max_dist < 999:
+		var room_left: int = maxi(0, max_dist - dist)
+		score += mini(room_left, 4)
+
+	return score
+
+
+func _player_band_center_score(dist: int) -> int:
+	if enemy_max_dist_from_player <= enemy_min_dist_from_player:
+		return 0
+
+	var center: float = (float(enemy_min_dist_from_player) + float(enemy_max_dist_from_player)) * 0.5
+	var diff: int = int(round(abs(float(dist) - center)))
+	return maxi(0, enemy_prefer_player_band_center_bonus - diff * 6)
+
+
+func _spread_score(cell: Vector2i, used: Dictionary) -> int:
+	var score: int = 0
+	for other in used.keys():
+		var other_cell: Vector2i = other
+		var d: int = _manhattan(cell, other_cell)
+		score += mini(d, 6) * enemy_prefer_spread_bonus_per_tile
+	return score
+
+
+func _score_enemy_spawn_cell(
+	cell: Vector2i,
+	player_pos: Vector2i,
+	exit_pos: Vector2i,
+	treasure_pos: Vector2i,
+	landmark_pos: Vector2i,
+	used: Dictionary
+) -> int:
+	var score: int = 0
+	var dp: int = _manhattan(cell, player_pos)
+	score += _player_band_center_score(dp)
+	score += _spread_score(cell, used)
+
+	if _is_valid_run_cell(exit_pos):
+		var de: int = _manhattan(cell, exit_pos)
+		score += _buffer_score(de, enemy_min_dist_from_exit, enemy_max_dist_from_exit)
+
+	if _is_valid_run_cell(treasure_pos):
+		var dt: int = _manhattan(cell, treasure_pos)
+		score += _buffer_score(dt, enemy_min_dist_from_treasure, enemy_max_dist_from_treasure)
+
+	if _is_valid_run_cell(landmark_pos):
+		var dl: int = _manhattan(cell, landmark_pos)
+		score += _buffer_score(dl, enemy_min_dist_from_landmark, enemy_max_dist_from_landmark)
+
+	return score
+
+
+func _pick_best_enemy_spawn_cell(
+	candidates: Array[Vector2i],
+	player_pos: Vector2i,
+	exit_pos: Vector2i,
+	treasure_pos: Vector2i,
+	landmark_pos: Vector2i,
+	used: Dictionary,
+	rng: RandomNumberGenerator
+) -> Vector2i:
+	var scored: Array[Dictionary] = []
+
+	for c in candidates:
+		var score: int = _score_enemy_spawn_cell(c, player_pos, exit_pos, treasure_pos, landmark_pos, used)
+		scored.append({
+			"cell": c,
+			"score": score,
+		})
+
+	if scored.is_empty():
+		return Vector2i(999999, 999999)
+
+	scored.shuffle()
+	scored.sort_custom(func(a: Dictionary, b: Dictionary): return int(a["score"]) > int(b["score"]))
+
+	var top_count: int = mini(enemy_spawn_top_pool_size, scored.size())
+	top_count = maxi(1, top_count)
+	var picked: Dictionary = scored[rng.randi_range(0, top_count - 1)]
+	return picked["cell"]
+
+
 func _reposition_start_enemies(player: Node) -> void:
 	var tree := get_tree()
 	if tree == null:
@@ -151,6 +256,9 @@ func _reposition_start_enemies(player: Node) -> void:
 	if not player.has_method("get_walkable_floor_candidates"):
 		return
 
+	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	rng.randomize()
+
 	var player_pos: Vector2i = player.get_grid_pos()
 
 	var exit_pos: Vector2i = Vector2i(999999, 999999)
@@ -161,6 +269,10 @@ func _reposition_start_enemies(player: Node) -> void:
 	if player.has_method("get_run_treasure_pos"):
 		treasure_pos = player.get_run_treasure_pos()
 
+	var landmark_pos: Vector2i = Vector2i(999999, 999999)
+	if player.has_method("get_run_landmark_pos"):
+		landmark_pos = player.get_run_landmark_pos()
+
 	var candidates: Array[Vector2i] = player.get_walkable_floor_candidates(true)
 	if candidates.is_empty():
 		return
@@ -170,6 +282,7 @@ func _reposition_start_enemies(player: Node) -> void:
 		return
 
 	var used: Dictionary = {}
+	var summary_parts: Array[String] = []
 
 	for e in enemies:
 		if e == null or not is_instance_valid(e):
@@ -186,14 +299,19 @@ func _reposition_start_enemies(player: Node) -> void:
 			if dp < enemy_min_dist_from_player or dp > enemy_max_dist_from_player:
 				continue
 
-			if exit_pos.x < 900000:
+			if _is_valid_run_cell(exit_pos):
 				var de: int = _manhattan(c, exit_pos)
 				if de < enemy_min_dist_from_exit or de > enemy_max_dist_from_exit:
 					continue
 
-			if treasure_pos.x < 900000:
+			if _is_valid_run_cell(treasure_pos):
 				var dt: int = _manhattan(c, treasure_pos)
 				if dt < enemy_min_dist_from_treasure or dt > enemy_max_dist_from_treasure:
+					continue
+
+			if _is_valid_run_cell(landmark_pos):
+				var dl: int = _manhattan(c, landmark_pos)
+				if dl < enemy_min_dist_from_landmark or dl > enemy_max_dist_from_landmark:
 					continue
 
 			legal.append(c)
@@ -201,9 +319,9 @@ func _reposition_start_enemies(player: Node) -> void:
 		var pick: Vector2i
 
 		if not legal.is_empty():
-			pick = legal[randi() % legal.size()]
+			pick = _pick_best_enemy_spawn_cell(legal, player_pos, exit_pos, treasure_pos, landmark_pos, used, rng)
 		else:
-			# fallback: at least far from player
+			# fallback: at least far from player, then still score for spread/objectives
 			var fallback: Array[Vector2i] = []
 			for c2 in candidates:
 				if used.has(c2):
@@ -213,9 +331,23 @@ func _reposition_start_enemies(player: Node) -> void:
 					fallback.append(c2)
 
 			if not fallback.is_empty():
-				pick = fallback[randi() % fallback.size()]
+				pick = _pick_best_enemy_spawn_cell(fallback, player_pos, exit_pos, treasure_pos, landmark_pos, used, rng)
 			else:
-				pick = candidates[randi() % candidates.size()]
+				pick = candidates[rng.randi_range(0, candidates.size() - 1)]
 
 		used[pick] = true
 		e.set_grid_pos(pick)
+
+		if debug_print_enemy_spawn_summary:
+			var dp_pick: int = _manhattan(pick, player_pos)
+			var line: String = "%s @ %s dp=%d" % [String(e.name), str(pick), dp_pick]
+			if _is_valid_run_cell(treasure_pos):
+				line += " dt=%d" % _manhattan(pick, treasure_pos)
+			if _is_valid_run_cell(exit_pos):
+				line += " de=%d" % _manhattan(pick, exit_pos)
+			if _is_valid_run_cell(landmark_pos):
+				line += " dl=%d" % _manhattan(pick, landmark_pos)
+			summary_parts.append(line)
+
+	if debug_print_enemy_spawn_summary and not summary_parts.is_empty():
+		print("Enemy spawn summary: %s" % " | ".join(summary_parts))
