@@ -8,6 +8,7 @@ class_name MapGenerator
 # --- Room size in tiles ---
 @export var width_tiles: int = 20
 @export var height_tiles: int = 12
+@export var tile_size_px: int = 16
 
 # --- Tile info (match your TileSet) ---
 @export var tile_source_id: int = 0
@@ -25,28 +26,46 @@ class_name MapGenerator
 # Where to draw the room (tile coords)
 @export var origin_cell: Vector2i = Vector2i.ZERO
 
-# If true, we center the room around where the player currently is
+# Keep OFF for v0 unless you really need it
 @export var center_room_on_player: bool = false
-@export var tile_size_px: int = 16  # used only for centering math
+
+# --- Procgen v0 tuning ---
+@export var auto_tune_player_for_room: bool = true
+@export var force_axis_aligned_landmark_clue: bool = true
+@export var debug_check_exit_reachable: bool = true
 
 # --- Seed (0 = random every time) ---
-@export var seed: int = 0
+@export var map_seed: int = 0
 var last_seed_used: int = 0
 
+# Remember last room rectangle (for debug checks)
+var _last_origin: Vector2i = Vector2i.ZERO
+var _last_w: int = 0
+var _last_h: int = 0
+
 func _ready() -> void:
-	var map := get_node_or_null(map_path) as TileMapLayer
+	var map: TileMapLayer = get_node_or_null(map_path) as TileMapLayer
 	if map == null:
 		push_warning("MapGenerator: map_path not set or not a TileMapLayer.")
 		return
 
-	generate(map, width_tiles, height_tiles, seed)
+	if auto_tune_player_for_room:
+		_tune_player_for_room(width_tiles, height_tiles)
+
+	generate(map, width_tiles, height_tiles, map_seed)
+
+	if debug_check_exit_reachable:
+		call_deferred("_post_ready_sanity_check")
 
 func generate(map: TileMapLayer, w: int, h: int, seed_in: int) -> bool:
 	if w < 5 or h < 5:
 		push_warning("MapGenerator: room too small. Need at least 5x5.")
 		return false
 
-	var rng := RandomNumberGenerator.new()
+	_last_w = w
+	_last_h = h
+
+	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 	if seed_in != 0:
 		rng.seed = seed_in
 		last_seed_used = seed_in
@@ -55,44 +74,51 @@ func generate(map: TileMapLayer, w: int, h: int, seed_in: int) -> bool:
 		last_seed_used = int(rng.seed)
 
 	# Grab templates from the CURRENT map before clearing it
-	var wall_tmpl := _find_first_blocked_tile_template(map)
+	var wall_tmpl: Dictionary = _find_first_blocked_tile_template(map)
 	if wall_tmpl.is_empty():
 		push_warning("MapGenerator: couldn't find ANY tile with custom_data 'blocked' to use as walls.")
 		return false
 
-	var exit_tmpl := _find_first_custom_tile_template(map, exit_custom_key)
+	var exit_tmpl: Dictionary = _find_first_custom_tile_template(map, exit_custom_key)
 	if exit_tmpl.is_empty():
-		push_warning("MapGenerator: couldn't find an 'exit' tile template. Player.gd expects one.")
+		push_warning("MapGenerator: couldn't find an 'exit' tile template. Player expects one.")
 		return false
 
-	var landmark_tmps := _find_all_custom_tile_templates(map, landmark_custom_key)
+	var landmark_tmps: Array[Dictionary] = _find_all_custom_tile_templates(map, landmark_custom_key)
 
 	# Decide origin
-	var origin := origin_cell
+	var origin: Vector2i = origin_cell
 	if center_room_on_player:
-		var player := get_node_or_null(player_path) as Node2D
-		if player != null:
-			var local_pos: Vector2 = map.to_local(player.global_position)
+		var player_for_origin: Node2D = get_node_or_null(player_path) as Node2D
+		if player_for_origin != null:
+			var local_pos: Vector2 = map.to_local(player_for_origin.global_position)
 			var half: float = float(tile_size_px) * 0.5
 			var player_cell: Vector2i = map.local_to_map(local_pos + Vector2(half, half))
-			origin = player_cell - Vector2i(int(w / 2), int(h / 2))
+			origin = player_cell - Vector2i(int(w / 2.0), int(h / 2.0))
+
+	_last_origin = origin
+
+	# Clamp rocks so we never “fill the room”
+	var interior_w: int = maxi(0, w - 2)
+	var interior_h: int = maxi(0, h - 2)
+	var interior_cells: int = interior_w * interior_h
+	var safe_max_rocks: int = maxi(0, interior_cells - 12)
+	var rocks: int = mini(rock_count, safe_max_rocks)
 
 	# Try until connected
-	for _try in range(reroll_attempts):
-		var blocked := _make_blocked_grid(w, h) # borders blocked
-		_sprinkle_rocks(blocked, w, h, rock_count, rng)
+	for _try: int in range(reroll_attempts):
+		var blocked: Array[PackedByteArray] = _make_blocked_grid(w, h)
+		_sprinkle_rocks(blocked, w, h, rocks, rng)
 
 		if _all_floors_connected(blocked, w, h):
 			_paint_map(map, origin, blocked, w, h, wall_tmpl)
 
-			# Put required templates back so Player.gd can do its normal logic
-			var exit_cell := origin + Vector2i(w - 2, h - 2) # inside border
-			_place_template_tile(map, exit_cell, exit_tmpl)
+			# Put required templates back so Player.gd can randomize exit/landmark/treasure
+			_place_template_tile(map, origin + Vector2i(1, 1), exit_tmpl)
 
 			if not landmark_tmps.is_empty():
 				_place_landmark_templates(map, origin, w, h, landmark_tmps)
 
-			# IMPORTANT: force player to spawn inside the room
 			_force_player_spawn_inside(map, origin, w, h)
 
 			return true
@@ -101,38 +127,141 @@ func generate(map: TileMapLayer, w: int, h: int, seed_in: int) -> bool:
 	return false
 
 # ----------------------------
-# Player spawn fix
+# Player tuning for small Procgen v0 rooms
 # ----------------------------
-func _force_player_spawn_inside(map: TileMapLayer, origin: Vector2i, w: int, h: int) -> void:
-	var player := get_node_or_null(player_path) as Node2D
+func _tune_player_for_room(w: int, h: int) -> void:
+	var player: Node = get_node_or_null(player_path)
 	if player == null:
 		return
 
-	# Pick a safe interior floor tile (center-ish), never on the border
-	var sx: int = clampi(int(w / 2), 1, w - 2)
-	var sy: int = clampi(int(h / 2), 1, h - 2)
-	var spawn_cell: Vector2i = origin + Vector2i(sx, sy)
+	# Keep Player room-boundary math consistent with actual tile room size.
+	player.set("room_width_px", w * tile_size_px)
+	player.set("room_height_px", h * tile_size_px)
 
-	# Teleport
-	player.global_position = map.to_global(map.map_to_local(spawn_cell))
+	# Scale distances for small maps (no integer-division warnings)
+	var size_score: int = w + h
+	var min_t: int = clampi(int(float(size_score) / 4.0), 4, 10)
+	var min_e: int = clampi(int(float(size_score) / 5.0), 4, 8)
 
-	# Also set grid_pos if the Player script has it (so logic matches position immediately)
-	# Player.gd uses grid_pos for movement/turn logic. :contentReference[oaicite:1]{index=1}
-	if player.has_method("set"):
-		player.set("grid_pos", spawn_cell)
+	player.set("min_treasure_dist_from_player", min_t)
+	player.set("min_landmark_dist_from_player", min_t)
+	player.set("min_exit_dist_from_player", min_e)
+	player.set("min_exit_dist_from_treasure", min_e)
+
+	var max_near: int = clampi(int(float(mini(w, h)) / 2.0), 3, 8)
+	player.set("landmark_treasure_max_dist", max_near)
+	player.set("landmark_treasure_min_dist", mini(2, max_near))
+
+	if force_axis_aligned_landmark_clue:
+		player.set("landmark_axis_aligned_chance_percent", 100)
 
 # ----------------------------
-# Blocked grid
+# Post-ready sanity check (exit reachability)
+# ----------------------------
+func _post_ready_sanity_check() -> void:
+	var map: TileMapLayer = get_node_or_null(map_path) as TileMapLayer
+	var player: Node2D = get_node_or_null(player_path) as Node2D
+	if map == null or player == null:
+		return
+
+	var player_cell: Vector2i = _compute_player_cell(map, player)
+	var exit_cell: Vector2i = _find_first_custom_tile_pos(map, exit_custom_key)
+
+	if exit_cell.x > 900000:
+		push_warning("MapGenerator sanity: No exit tile found.")
+		return
+
+	var ok: bool = _reachable_not_blocked(map, player_cell, exit_cell, _last_origin, _last_w, _last_h)
+	if not ok:
+		push_warning("MapGenerator sanity: Exit is NOT reachable. This should not happen in Procgen v0 room.")
+
+func _compute_player_cell(map: TileMapLayer, player: Node2D) -> Vector2i:
+	# Avoid Variant-inference warnings: explicitly type Variant
+	var v: Variant = player.get("grid_pos")
+	if typeof(v) == TYPE_VECTOR2I:
+		return v as Vector2i
+
+	var local_pos: Vector2 = map.to_local(player.global_position)
+	var half: float = float(tile_size_px) * 0.5
+	return map.local_to_map(local_pos + Vector2(half, half))
+
+func _find_first_custom_tile_pos(map: TileMapLayer, key: StringName) -> Vector2i:
+	var used: Array[Vector2i] = map.get_used_cells()
+	for cell: Vector2i in used:
+		var td: TileData = map.get_cell_tile_data(cell)
+		if td != null and bool(td.get_custom_data(key)):
+			return cell
+	return Vector2i(999999, 999999)
+
+func _reachable_not_blocked(map: TileMapLayer, start: Vector2i, goal: Vector2i, origin: Vector2i, w: int, h: int) -> bool:
+	if start == goal:
+		return true
+
+	var minx: int = origin.x
+	var miny: int = origin.y
+	var maxx: int = origin.x + w - 1
+	var maxy: int = origin.y + h - 1
+
+	var q: Array[Vector2i] = [start]
+	var seen: Dictionary = {}
+	seen[start] = true
+
+	var dirs: Array[Vector2i] = [Vector2i(1,0), Vector2i(-1,0), Vector2i(0,1), Vector2i(0,-1)]
+
+	var qi: int = 0
+	while qi < q.size():
+		var p: Vector2i = q[qi]
+		qi += 1
+
+		for d: Vector2i in dirs:
+			var n: Vector2i = p + d
+
+			if n.x < minx or n.y < miny or n.x > maxx or n.y > maxy:
+				continue
+			if seen.has(n):
+				continue
+
+			var td: TileData = map.get_cell_tile_data(n)
+			if td == null:
+				continue
+			if bool(td.get_custom_data(blocked_custom_key)):
+				continue
+
+			if n == goal:
+				return true
+
+			seen[n] = true
+			q.append(n)
+
+	return false
+
+# ----------------------------
+# Player spawn fix
+# ----------------------------
+func _force_player_spawn_inside(map: TileMapLayer, origin: Vector2i, w: int, h: int) -> void:
+	var player: Node2D = get_node_or_null(player_path) as Node2D
+	if player == null:
+		return
+
+	var sx: int = clampi(int(float(w) / 2.0), 1, w - 2)
+	var sy: int = clampi(int(float(h) / 2.0), 1, h - 2)
+	var spawn_cell: Vector2i = origin + Vector2i(sx, sy)
+
+	player.global_position = map.to_global(map.map_to_local(spawn_cell))
+	player.set("grid_pos", spawn_cell)
+
+# ----------------------------
+# Blocked grid + connectivity
 # ----------------------------
 func _make_blocked_grid(w: int, h: int) -> Array[PackedByteArray]:
 	var rows: Array[PackedByteArray] = []
 	rows.resize(h)
 
-	for y in range(h):
-		var row := PackedByteArray()
+	for y: int in range(h):
+		var row: PackedByteArray = PackedByteArray()
 		row.resize(w)
-		for x in range(w):
-			var is_border := (x == 0 or y == 0 or x == w - 1 or y == h - 1)
+		for x: int in range(w):
+			var is_border: bool = (x == 0 or y == 0 or x == w - 1 or y == h - 1)
 			row[x] = 1 if is_border else 0
 		rows[y] = row
 
@@ -142,25 +271,22 @@ func _sprinkle_rocks(blocked: Array[PackedByteArray], w: int, h: int, count: int
 	if count <= 0:
 		return
 
-	var placed := 0
-	var attempts := count * 12
+	var placed: int = 0
+	var attempts: int = count * 12
 	while placed < count and attempts > 0:
 		attempts -= 1
-		var x := rng.randi_range(1, w - 2)
-		var y := rng.randi_range(1, h - 2)
+		var x: int = rng.randi_range(1, w - 2)
+		var y: int = rng.randi_range(1, h - 2)
 		if blocked[y][x] == 0:
 			blocked[y][x] = 1
 			placed += 1
 
-# ----------------------------
-# Connectivity check (flood fill)
-# ----------------------------
 func _all_floors_connected(blocked: Array[PackedByteArray], w: int, h: int) -> bool:
-	var total_floor := 0
-	var start := Vector2i(-1, -1)
+	var total_floor: int = 0
+	var start: Vector2i = Vector2i(-1, -1)
 
-	for y in range(h):
-		for x in range(w):
+	for y: int in range(h):
+		for x: int in range(w):
 			if blocked[y][x] == 0:
 				total_floor += 1
 				if start.x == -1:
@@ -171,20 +297,18 @@ func _all_floors_connected(blocked: Array[PackedByteArray], w: int, h: int) -> b
 
 	var visited: Array[PackedByteArray] = []
 	visited.resize(h)
-	for y in range(h):
-		var row := PackedByteArray()
+	for y: int in range(h):
+		var row: PackedByteArray = PackedByteArray()
 		row.resize(w)
 		visited[y] = row
 
 	var q: Array[Vector2i] = [start]
 	visited[start.y][start.x] = 1
 
-	var dirs: Array[Vector2i] = [
-		Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)
-	]
+	var dirs: Array[Vector2i] = [Vector2i(1,0), Vector2i(-1,0), Vector2i(0,1), Vector2i(0,-1)]
 
-	var qi := 0
-	var reached := 0
+	var qi: int = 0
+	var reached: int = 0
 
 	while qi < q.size():
 		var p: Vector2i = q[qi]
@@ -217,9 +341,9 @@ func _paint_map(map: TileMapLayer, origin: Vector2i, blocked: Array[PackedByteAr
 	var wac: Vector2i = wall_tmpl["ac"]
 	var walt: int = int(wall_tmpl["alt"])
 
-	for y in range(h):
-		for x in range(w):
-			var cell := origin + Vector2i(x, y)
+	for y: int in range(h):
+		for x: int in range(w):
+			var cell: Vector2i = origin + Vector2i(x, y)
 			if blocked[y][x] == 1:
 				map.set_cell(cell, wsid, wac, walt)
 			else:
@@ -288,5 +412,5 @@ func _place_landmark_templates(map: TileMapLayer, origin: Vector2i, w: int, h: i
 	]
 
 	var n: int = mini(spots.size(), tmps.size())
-	for i in range(n):
+	for i: int in range(n):
 		_place_template_tile(map, spots[i], tmps[i])
