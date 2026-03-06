@@ -17,6 +17,7 @@ class_name MapGenerator
 # --- Custom-data keys used in your TileSet ---
 @export var exit_custom_key: StringName = &"exit"
 @export var landmark_custom_key: StringName = &"landmark"
+@export var treasure_custom_key: StringName = &"treasure"
 @export var blocked_custom_key: StringName = &"blocked"
 
 # --- Generation settings ---
@@ -156,7 +157,7 @@ func _tune_player_for_room(w: int, h: int) -> void:
 		player.set("landmark_axis_aligned_chance_percent", 100)
 
 # ----------------------------
-# Post-ready sanity check (exit reachability)
+# Post-ready sanity check (treasure/exit reachability)
 # ----------------------------
 func _post_ready_sanity_check() -> void:
 	var map: TileMapLayer = get_node_or_null(map_path) as TileMapLayer
@@ -165,15 +166,31 @@ func _post_ready_sanity_check() -> void:
 		return
 
 	var player_cell: Vector2i = _compute_player_cell(map, player)
+	var treasure_cell: Vector2i = _find_first_custom_tile_pos(map, treasure_custom_key)
 	var exit_cell: Vector2i = _find_first_custom_tile_pos(map, exit_custom_key)
 
-	if exit_cell.x > 900000:
-		push_warning("MapGenerator sanity: No exit tile found.")
-		return
+	var has_treasure: bool = treasure_cell.x <= 900000
+	var has_exit: bool = exit_cell.x <= 900000
 
-	var ok: bool = _reachable_not_blocked(map, player_cell, exit_cell, _last_origin, _last_w, _last_h)
-	if not ok:
-		push_warning("MapGenerator sanity: Exit is NOT reachable. This should not happen in Procgen v0 room.")
+	if not has_treasure:
+		push_warning("MapGenerator sanity: No treasure tile found.")
+	if not has_exit:
+		push_warning("MapGenerator sanity: No exit tile found.")
+
+	if has_treasure:
+		var player_to_treasure_ok: bool = _reachable_not_blocked(map, player_cell, treasure_cell, _last_origin, _last_w, _last_h)
+		if not player_to_treasure_ok:
+			push_warning("MapGenerator sanity: Treasure is NOT reachable from player.")
+
+	if has_exit:
+		var player_to_exit_ok: bool = _reachable_not_blocked(map, player_cell, exit_cell, _last_origin, _last_w, _last_h)
+		if not player_to_exit_ok:
+			push_warning("MapGenerator sanity: Exit is NOT reachable from player. This should not happen in Procgen v0 room.")
+
+	if has_treasure and has_exit:
+		var treasure_to_exit_ok: bool = _reachable_not_blocked(map, treasure_cell, exit_cell, _last_origin, _last_w, _last_h)
+		if not treasure_to_exit_ok:
+			push_warning("MapGenerator sanity: Exit is NOT reachable from treasure.")
 
 func _compute_player_cell(map: TileMapLayer, player: Node2D) -> Vector2i:
 	# Avoid Variant-inference warnings: explicitly type Variant
@@ -206,7 +223,7 @@ func _reachable_not_blocked(map: TileMapLayer, start: Vector2i, goal: Vector2i, 
 	var seen: Dictionary = {}
 	seen[start] = true
 
-	var dirs: Array[Vector2i] = [Vector2i(1,0), Vector2i(-1,0), Vector2i(0,1), Vector2i(0,-1)]
+	var dirs: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 
 	var qi: int = 0
 	while qi < q.size():
@@ -305,7 +322,7 @@ func _all_floors_connected(blocked: Array[PackedByteArray], w: int, h: int) -> b
 	var q: Array[Vector2i] = [start]
 	visited[start.y][start.x] = 1
 
-	var dirs: Array[Vector2i] = [Vector2i(1,0), Vector2i(-1,0), Vector2i(0,1), Vector2i(0,-1)]
+	var dirs: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 
 	var qi: int = 0
 	var reached: int = 0
