@@ -598,10 +598,10 @@ func _do_exit_spin() -> void:
 
 
 # ----------------------------
-# Extraction Mode: toast + exit blink
+# Extraction Mode: exit blink only.
+# Main.gd owns the treasure-found toast sequence now.
 # ----------------------------
 func _enter_extraction_mode() -> void:
-	_show_toast("TREASURE FOUND!\nESCAPE!", toast_duration_sec)
 	if exit_blink_enabled and not _exit_blink_running and _exit_tiles.size() > 0:
 		_exit_blink_running = true
 		_exit_blink_show_exit = true
