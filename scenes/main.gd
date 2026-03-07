@@ -217,8 +217,16 @@ func _on_player_turn_taken(player_grid_pos: Vector2i) -> void:
 	if _player != null and _player.has_method("set_turn_locked"):
 		_player.set_turn_locked(true)
 
+	var treasure_just_triggered_escape_phase: bool = false
 	if GameManager.has_treasure and not _treasure_found_handled:
+		treasure_just_triggered_escape_phase = true
 		await _handle_treasure_found_response(player_grid_pos)
+
+	if treasure_just_triggered_escape_phase:
+		if _player != null and _player.has_method("set_turn_locked"):
+			_player.set_turn_locked(false)
+		_enemy_phase_running = false
+		return
 
 	await _run_enemy_turns(player_grid_pos)
 

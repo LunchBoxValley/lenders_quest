@@ -101,7 +101,6 @@ script = ExtResource("1_tipki")
 player_path = NodePath("Player")
 debt_label_path = NodePath("Hud/DebtLabel")
 enemy_scene = ExtResource("2_sugp2")
-treasure_pressure_extra_turns_after_treasure = 1
 
 [node name="BackGround" type="ColorRect" parent="." unique_id=1274117198]
 offset_left = -634.0
