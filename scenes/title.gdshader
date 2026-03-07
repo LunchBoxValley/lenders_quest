@@ -7,11 +7,11 @@ uniform sampler2D SCREEN_TEXTURE : hint_screen_texture, filter_nearest;
 // ----------------------------
 uniform bool warmup_enabled = false;
 uniform float warmup_start_time = 0.0;                // set by Title script
-uniform float warmup_duration : hint_range(0.1, 6.0) = 2.0;
+uniform float warmup_duration : hint_range(0.1, 6.0) = 0.8;
 
 // Soft “bloom to life” shape (not a sharp center line)
 uniform float warmup_aperture_softness : hint_range(0.01, 0.80) = 0.22; // edge softness of the expanding glow
-uniform float warmup_glow_strength     : hint_range(0.0, 2.0) = 1.00;   // how bright the warm glow is
+uniform float warmup_glow_strength     : hint_range(0.0, 2.0) = 1.20;   // how bright the warm glow is
 
 // Make the title fade in late (so it doesn't appear crisp immediately)
 uniform float warmup_fade_in_start : hint_range(0.0, 1.0) = 0.70; // start fading image in (as fraction of warmup)
@@ -22,14 +22,14 @@ uniform float warmup_defocus_strength  : hint_range(0.0, 1.0) = 0.85;
 uniform float warmup_defocus_radius_px : hint_range(0.0, 3.0) = 1.3;
 
 // Optional wobble (very subtle)
-uniform float warmup_wobble_uv : hint_range(0.0, 0.02) = 0.0035;
+uniform float warmup_wobble_uv : hint_range(0.0, 0.02) = 0.0025;
 
 // ----------------------------
 // Scanlines
 // ----------------------------
-uniform float scanline_strength : hint_range(0.0, 1.0) = 0.65;
-uniform float scanline_density  : hint_range(100.0, 1200.0) = 450.0;
-uniform float scanline_thickness : hint_range(0.05, 2.0) = 0.85;
+uniform float scanline_strength : hint_range(0.0, 1.0) = 0.75;
+uniform float scanline_density  : hint_range(100.0, 1200.0) = 650.0;
+uniform float scanline_thickness : hint_range(0.05, 2.0) = 0.95;
 uniform float scanline_offset    : hint_range(0.0, 1.0) = 0.2;
 
 // Subtle drift (CRT "breathing")
