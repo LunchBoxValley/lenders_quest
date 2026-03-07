@@ -42,7 +42,7 @@ extends Node
 
 # --- Treasure found response (small prototype-safe escalation) ---
 @export var treasure_found_role_response_enabled: bool = true
-@export var treasure_pressure_extra_turns_after_treasure: int = 2
+@export var treasure_pressure_extra_turns_after_treasure: int = 1
 @export var flanker_extra_turns_after_treasure: int = 1
 @export var neutral_extra_turns_after_treasure: int = 1
 
